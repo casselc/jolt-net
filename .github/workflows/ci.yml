@@ -62,7 +62,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: probed-${{ matrix.os }}
-          path: tools/probed/*.edn
+          # Upload only the file produced on this runner.  The checkout already
+          # contains the other committed probes; uploading the whole directory
+          # makes the aggregate job compare (for example) the committed Darwin
+          # file copied by a Linux runner against Darwin's real probe.
+          path: ${{ env.PROBE_FILE }}
 
   # Fail if any committed descriptor disagrees with what that platform's headers
   # actually say. A drift here is not cosmetic -- a wrong struct offset is memory
