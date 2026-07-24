@@ -13,14 +13,39 @@
 # Override the fork location with JOLT_UPSTREAM.
 set -eu
 
-JOLT_UPSTREAM="${JOLT_UPSTREAM:-/home/chuck/ai-src/worktrees/jolt-upstream-6-8}"
-JOLTC="$JOLT_UPSTREAM/bin/joltc"
+# An explicit JOLT_UPSTREAM is authoritative: if it is set but wrong, say so
+# rather than silently falling back to a different runtime, which would make the
+# override look like it worked.
+if [ -n "${JOLT_UPSTREAM:-}" ]; then
+    if [ ! -x "$JOLT_UPSTREAM/bin/joltc" ]; then
+        echo "jnc: JOLT_UPSTREAM=$JOLT_UPSTREAM has no bin/joltc" >&2
+        exit 1
+    fi
+else
+    # Otherwise search: the dedicated worktree, then a sibling checkout. The
+    # branch carrying the required primitives is codex/upstream-improvements-6-8;
+    # a plain checkout works if it is on that branch.
+    for candidate in \
+        /home/chuck/ai-src/worktrees/jolt-upstream-6-8 \
+        /home/chuck/ai-src/jolt-upstream \
+        "$(dirname -- "$0")/../../jolt-upstream"
+    do
+        if [ -x "$candidate/bin/joltc" ]; then
+            JOLT_UPSTREAM="$candidate"
+            break
+        fi
+    done
+fi
+
+JOLTC="${JOLT_UPSTREAM:-}/bin/joltc"
 
 if [ ! -x "$JOLTC" ]; then
-    echo "jnc: no joltc at $JOLTC" >&2
-    echo "jnc: jolt-net requires the local jolt fork (jolt.host/target," >&2
-    echo "     jolt.ffi/errno, 16-bit FFI types). Set JOLT_UPSTREAM to the" >&2
-    echo "     fork checkout. See docs/UPSTREAM-NOTES.md." >&2
+    echo "jnc: could not find a jolt fork checkout with bin/joltc." >&2
+    echo "jnc: jolt-net requires the local fork (jolt.host/target," >&2
+    echo "     jolt.ffi/errno, 16-bit FFI types) on branch" >&2
+    echo "     codex/upstream-improvements-6-8. The released joltc on PATH" >&2
+    echo "     cannot load this library. Set JOLT_UPSTREAM to the checkout." >&2
+    echo "     See docs/UPSTREAM-NOTES.md." >&2
     exit 1
 fi
 
