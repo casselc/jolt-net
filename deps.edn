@@ -5,8 +5,8 @@
 ;; the byte contract in a separate, optional namespace and must never be required
 ;; to open a plain TCP socket.
 ;;
-;; REQUIRES THE LOCAL JOLT FORK. Released joltc v0.4.15 lacks (jolt.host/target),
-;; jolt.ffi/errno, and the 16-bit foreign types this library is built on. Use
+;; REQUIRES THE LOCAL JOLT FORK. Released joltc v0.4.15 lacks the target,
+;; monotonic-clock, errno, 16-bit-type, and scoped array-slice primitives. Use
 ;; bin/jnc, which points at the fork and fails with a readable message instead of
 ;; an unbound-var error. See docs/UPSTREAM-NOTES.md.
 ;;
@@ -21,15 +21,17 @@
 
  ;; jolt-hegel is test-time only (property/stateful generation via libhegel), so
  ;; it lives in :extra-deps rather than :deps — a property-testing library must
- ;; never become a runtime dependency of a socket layer. Pinned to the peeled
- ;; commit behind release tag v0.1.2, matching jolt-tcp and jolt-http. Because
+ ;; never become a runtime dependency of a socket layer. Pinned to the reviewed
+ ;; direct-libhegel branch commit. Because
  ;; the dep is alias-scoped, the installer needs the alias too:
  ;;   bin/jnc -A:test -m hegel.install
  :aliases {:test {:extra-paths ["test"]
-                  :extra-deps {io.github.chucklehead-dev/jolt-hegel
-                               {:git/url "https://github.com/chucklehead-dev/jolt-hegel.git"
-                                :git/sha "ffe523023437862c7e474dc216346426318754c6"}}
-                  :main-opts ["-m" "jolt.net.test-main"]}}
+                  :extra-deps {io.github.casselc/jolt-hegel
+                               {:git/url "https://github.com/casselc/jolt-hegel.git"
+                                :git/sha "92cbb0a429d06d406eff7aeeb79f83b486acbf07"}}
+                  :main-opts ["-m" "jolt.net.test-main"]}
+           :sigpipe {:extra-paths ["test"]
+                     :main-opts ["-m" "jolt.net.sigpipe-child"]}}
 
  ;; Deliberately NOT `joltc -M:test`: a bare `joltc` resolves to the stock
  ;; v0.4.15 on PATH, which cannot load this library at all.

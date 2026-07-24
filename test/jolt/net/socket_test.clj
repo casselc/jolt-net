@@ -1,6 +1,7 @@
 (ns jolt.net.socket-test
   "Real sockets on real loopback. Everything here executes; nothing is simulated."
-  (:require [jolt.net.check :as c]
+  (:require [clojure.java.shell :as shell]
+            [jolt.net.check :as c]
             [jolt.net :as net]
             [jolt.net.handle :as h]
             [jolt.net.error :as err]))
@@ -80,6 +81,13 @@
                 (try (net/connect (net/endpoint "127.0.0.1" 1))
                      (catch :default e (:jolt.net/code (ex-data e)))))
 
+  (when (contains? #{:linux :darwin} (:os (jolt.host/target)))
+    (let [project-root (System/getenv "JOLT_PWD")
+          result (shell/sh (str project-root "/bin/jnc") "-M:sigpipe"
+                           :dir project-root)]
+      (c/check "closed-peer write survives SIGPIPE in a subprocess"
+               0 (:exit result))))
+
   ;; binding a port that is already bound, WITHOUT reuse
   (let [l (net/listen (net/endpoint "127.0.0.1" 0))
         port (:jolt.net/port (net/local-endpoint l))]
@@ -113,6 +121,21 @@
     (with-open [l (net/listen (net/endpoint "127.0.0.1" 0))]
       (reset! captured l))
     (c/check "with-open closes the handle via its :close fn" true (net/closed? @captured)))
+
+  ;; POSIX blocking accept is implemented through the close-wakeable readiness
+  ;; path. It must not hold an uninterruptible lease or enter accept(2) on an fd
+  ;; that close can recycle.
+  (when (contains? #{:linux :darwin} (:os (jolt.host/target)))
+    (let [l (net/listen (net/endpoint "127.0.0.1" 0))
+          waiting (future
+                    (try
+                      (net/accept l)
+                      :unexpected-accept
+                      (catch :default e (:jolt.net/kind (ex-data e)))))]
+      (Thread/sleep 20)
+      (net/close! l)
+      (c/check "listener close releases blocking accept without descriptor reuse"
+               :invalid (deref waiting 500 ::timed-out))))
 
   (c/section "sockets: rollback does not leak descriptors")
   ;; Every failed listen allocates a socket and must close it on the way out. If

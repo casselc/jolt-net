@@ -3,6 +3,7 @@
  :pointer-bits 64
  :socket-handle-bytes 4
  :socklen-bytes 4
+ :nfds-bytes 4
  :const {
   :af-unspec 0
   :af-inet 2
@@ -29,11 +30,17 @@
   :o-nonblock 4
   :f-getfl 3
   :f-setfl 4
+  :pollin 1
+  :pollout 4
+  :pollerr 8
+  :pollhup 16
+  :pollnval 32
  }
  :layout {
   :sockaddr-in {:size 16 :family 1 :port 2 :addr 4}
   :sockaddr-in6 {:size 28 :family 1 :port 2 :flowinfo 4 :addr 8 :scope-id 24}
   :sockaddr-storage {:size 128}
+  :pollfd {:size 8 :fd 0 :events 4 :revents 6}
   :addrinfo {:size 48 :flags 0 :family 4 :socktype 8 :protocol 12 :addrlen 16 :canonname 24 :addr 32 :next 40 :addrlen-bytes 4}
   :sin-len? true
  }

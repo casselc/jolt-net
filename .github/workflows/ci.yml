@@ -9,13 +9,15 @@
 #           remembered numbers into checked ones, and it is the only way the
 #           macOS column becomes real.
 #
-#   test  — the full suite. Needs the forked joltc (jolt.host/target,
-#           jolt.ffi/errno, 16-bit FFI types), which means checking out
-#           casselc/jolt and a working Chez Scheme.
+#   test  — the full suite. Needs the forked joltc host/FFI primitives, which
+#           means checking out an exact casselc/jolt revision and building a
+#           matching Chez Scheme.
 #
-# Windows is deliberately probe-only for now: there is no packaged Chez Scheme
-# for Windows runners, so the full suite cannot run there yet. That is stated
-# here rather than hidden, and docs/PLATFORM-COVERAGE.md says the same.
+# Windows is deliberately probe-only for now. The current Jolt runtime path and
+# real Winsock calls have not been characterized together, so source-building
+# Chez here would turn an ABI claim into a misleading runtime-coverage claim.
+# That distinction is stated here rather than hidden, and
+# docs/PLATFORM-COVERAGE.md says the same.
 
 name: ci
 
@@ -124,7 +126,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # No packaged Chez Scheme for Windows runners; see the header comment.
+        # Windows remains ABI-probe-only; see the header comment.
         os: [ubuntu-latest, macos-latest]
     steps:
       - name: Checkout jolt-net
@@ -138,51 +140,81 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: casselc/jolt
-          ref: codex/upstream-improvements-6-8
+          ref: 1c8fdb97eee58870b9fb9de928430d016c0cf06d
           submodules: recursive
           path: jolt-upstream
 
-      # libssl/libcrypto back jolt.mvn-http's HTTPS client, which is what
-      # hegel.install uses to fetch libhegel. macOS gets these from brew already.
-      - name: Install Chez Scheme and OpenSSL (Linux)
+      # Build the same official Chez release used by Jolt's core workflow. The
+      # distro package is deliberately not used: it lacks the development
+      # kernel files needed by Jolt build paths and makes the runtime substrate
+      # drift from the source-build gate.
+      - name: Install source-build dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y chezscheme libssl-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git liblz4-dev zlib1g-dev \
+            libncurses-dev uuid-dev libssl-dev
 
-      - name: Install Chez Scheme (macOS)
+      - name: Install source-build dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install chezscheme
+        run: brew install lz4 openssl@3
 
-      # bin/joltc searches for `chez` then `chezscheme` -- not `scheme`, which is
-      # the name the Debian package installs.
-      #
-      # This must be a WRAPPER SCRIPT, not a symlink. Chez locates its .boot
-      # files relative to the executable path, so a symlink in ~/bin makes it
-      # search ~/bin and fail with "cannot find compatible chez.boot in search
-      # path". exec'ing the real binary keeps argv[0] pointing at the install.
-      - name: Provide a `chez` entry point
+      - name: Cache Chez Scheme (Linux)
+        if: runner.os == 'Linux'
+        id: cache-chez-linux
+        uses: actions/cache@v4
+        with:
+          path: ~/chez
+          key: chez-${{ runner.os }}-${{ runner.arch }}-v10.4.1-x11off-v1
+
+      - name: Build official Chez Scheme v10.4.1 from source (Linux)
+        if: runner.os == 'Linux' && steps.cache-chez-linux.outputs.cache-hit != 'true'
         shell: bash
         run: |
-          set -eu
-          if command -v chez >/dev/null 2>&1; then
-            echo "chez already on PATH at $(command -v chez)"
-          else
-            found=""
-            for c in chezscheme scheme; do
-              if command -v "$c" >/dev/null 2>&1; then found=$(command -v "$c"); break; fi
-            done
-            [ -n "$found" ] || { echo "no Chez Scheme on PATH"; exit 1; }
-            echo "wrapping $found as chez"
-            mkdir -p "$HOME/bin"
-            printf '#!/bin/sh\nexec %s "$@"\n' "$found" > "$HOME/bin/chez"
-            chmod +x "$HOME/bin/chez"
-            echo "$HOME/bin" >> "$GITHUB_PATH"
-          fi
+          set -euo pipefail
+          git clone --depth 1 --branch v10.4.1 \
+            https://github.com/cisco/ChezScheme.git "$RUNNER_TEMP/chez-src"
+          cd "$RUNNER_TEMP/chez-src"
+          ./configure --installprefix="$HOME/chez" --threads --disable-x11
+          make -j"$(nproc)"
+          make install
 
-      - name: Verify Chez actually starts
+      - name: Cache Chez Scheme (macOS)
+        if: runner.os == 'macOS'
+        id: cache-chez-macos
+        uses: actions/cache@v4
+        with:
+          path: ~/chez
+          key: chez-${{ runner.os }}-${{ runner.arch }}-v10.4.1-x11off-v1
+
+      - name: Build official Chez Scheme v10.4.1 from source (macOS)
+        if: runner.os == 'macOS' && steps.cache-chez-macos.outputs.cache-hit != 'true'
         shell: bash
         run: |
-          set -eu
-          echo '(begin (display (scheme-version)) (newline) (exit))' | chez -q
+          set -euo pipefail
+          git clone --depth 1 --branch v10.4.1 \
+            https://github.com/cisco/ChezScheme.git "$RUNNER_TEMP/chez-src"
+          cd "$RUNNER_TEMP/chez-src"
+          ./configure --installprefix="$HOME/chez" --threads --disable-x11
+          make -j"$(sysctl -n hw.ncpu)"
+          make install
+
+      - name: Provide the source-built Chez entry point
+        shell: bash
+        run: |
+          set -euo pipefail
+          bindir="$HOME/chez/bin"
+          test -x "$bindir/scheme"
+          printf '#!/bin/sh\nexec %s "$@"\n' "$bindir/scheme" > "$bindir/chez"
+          chmod +x "$bindir/chez"
+          echo "$bindir" >> "$GITHUB_PATH"
+
+      - name: Assert official Chez v10.4.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          chez --version | tee /tmp/chez-version
+          grep -Fq '10.4.1' /tmp/chez-version
 
       # Best-effort: libhegel is a downloaded native library, and a release-asset
       # fetch is not a reason to lose the socket coverage. The suite degrades to
@@ -206,8 +238,7 @@ jobs:
         run: ./bin/jnc -M:test
 
       # If the freshly probed facts differ from what is committed, surface the
-      # diff -- on macOS this is expected on the first run, because that table
-      # was written from documentation rather than from a machine.
+      # exact drift alongside the hard comparison in the tables job.
       - name: Show any drift in the committed tables
         if: always()
         working-directory: jolt-net

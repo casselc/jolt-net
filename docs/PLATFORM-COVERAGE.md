@@ -10,19 +10,20 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 | Level | Meaning |
 |---|---|
 | **runtime** | Real sockets opened, real syscalls made, on this platform in CI. |
+| **candidate** | Implemented from probed ABI facts and assigned to a native CI gate, but that gate has not yet validated this exact revision. |
 | **probed** | `tools/probe-constants.c` compiled against that platform's real system headers and **executed**, so every constant, `sizeof`, and `offsetof` is read from the platform itself and diffed against the committed table. Proves the numbers; proves nothing about calls. |
 | **table** | Only the selection logic is exercised. The numbers themselves are unverified. |
 | **none** | Not covered. |
 
 ## Current state
 
-| Platform | Constants / layouts | Socket calls | Notes |
-|---|---|---|---|
-| Linux x86-64 | **probed** | **runtime** | The development and CI platform. |
-| Linux aarch64 | table | none | Aliases the x86-64 socket facts: same kernel UAPI, same LP64. An explicit table entry with the checked facts listed — never a `:linux` fallback. |
-| Windows x86-64 | **probed** | none | Probed on a real Windows CI runner (and independently via mingw + WSL interop, which agree). Numbers are trustworthy; **no Winsock call has ever been made from jolt on Windows** — there is no packaged Chez Scheme for Windows runners, so the suite cannot run there yet. |
-| macOS arm64 | **probed** | **runtime** | Probed and fully exercised on a macOS arm64 CI runner. |
-| macOS x86-64 | **table** | none | Shares the arm64 descriptor: these are SDK facts rather than arch facts on macOS. Only arm64 is machine-checked. |
+| Platform | Constants / layouts | Blocking socket base | Non-blocking I/O + poller | Notes |
+|---|---|---|---|---|
+| Linux x86-64 | **probed** | **runtime** | **runtime** | The development and CI platform. Real `fcntl`, `poll`, pipe-wake, sliced byte I/O, EOF, mutation wake, and close races are exercised. |
+| Linux aarch64 | table | none | none | Aliases the x86-64 socket facts: same kernel UAPI, same LP64. An explicit table entry with the checked facts listed — never a `:linux` fallback. |
+| Windows x86-64 | **probed** | none | none | Probed on a real Windows CI runner (and independently via mingw + WSL interop, which agree). Numbers are trustworthy; **no Winsock call has ever been made from jolt on Windows** — there is no packaged Chez Scheme for Windows runners, so the suite cannot run there yet. |
+| macOS arm64 | **probed** | **runtime** | **candidate** | Uses `poll(2)`, `fcntl`, and the same owner-independent self-pipe protocol as Linux, with Darwin's distinct 32-bit `nfds_t` binding. The complete native suite is a required macOS CI gate for this revision. |
+| macOS x86-64 | **table** | none | none | Shares the arm64 descriptor: these are SDK facts rather than arch facts on macOS. Only arm64 is machine-checked. |
 
 ## Specific residuals
 
@@ -31,9 +32,25 @@ Do not summarize this file as "supports Linux, macOS and Windows."
   predicate is exercised on Linux against synthetic high-bit values, which proves the
   predicate but not the FFI marshaling of a `:uptr` result ≥ 2^63.
 - **`WSAStartup` once-only initialization** is unexercised.
+- **Windows readiness** still needs `ioctlsocket(FIONBIO)`, `WSAPoll`, and a
+  tested owner-independent wake transport such as a loopback UDP pair.
+- **macOS readiness validation.** The implementation uses only APIs present on
+  both POSIX targets, but support remains a candidate until the complete poller,
+  close-race, SIGPIPE, and sliced-I/O suite passes on the macOS runner for this
+  revision. There is no fallback to the old uninterruptible accept path.
+- **Readiness hot-path shape.** Listener, connected, and accepted descriptors
+  enter nonblocking mode once. A scoped core FFI primitive pins and exposes the
+  validated interior pointer for every byte-array slice, so partial recv/send
+  calls allocate no temporary array and copy no payload bytes.
+- **Interrupted poll.** POSIX `EINTR` is retried against the same absolute
+  monotonic deadline; interruption does not restart or extend the caller's
+  timeout. Wake-pipe reads and writes also retry `EINTR` while retaining the
+  same short handle lease and native buffer.
+- **Darwin `nfds_t`.** The probe records the width and the call table selects an
+  exact binding: `:size_t` on supported LP64 Linux and `:uint` on Darwin.
 - **macOS `sin_len`.** BSD puts the struct size in byte 0 and the family in byte 1.
-  Encoded and asserted from Linux against the Darwin descriptor, so the *encoder* is
-  tested; that byte 0 must be 16 is taken from documentation.
+  The Mac probe supplies both the 16-byte struct size and family offset 1; the
+  pure encoder is then exercised from Linux against those probed facts.
 - **Wall-clock adjustment.** The monotonic clock's independence from an NTP step is
   not directly tested — stepping the system clock needs root. The test substitutes
   the falsifiable half: proving a distinct, boot-relative source.

@@ -29,6 +29,7 @@
 (ffi/defcfn p-bind        "bind"        [:int :pointer :uint] :int)
 (ffi/defcfn p-listen      "listen"      [:int :int] :int)
 (ffi/defcfn p-accept      "accept"      [:int :pointer :pointer] :int :blocking)
+(ffi/defcfn p-try-accept  "accept"      [:int :pointer :pointer] :int)
 (ffi/defcfn p-connect     "connect"     [:int :pointer :uint] :int :blocking)
 (ffi/defcfn p-close       "close"       [:int] :int)
 (ffi/defcfn p-shutdown    "shutdown"    [:int :int] :int)
@@ -37,6 +38,18 @@
 (ffi/defcfn p-setsockopt  "setsockopt"  [:int :int :int :pointer :uint] :int)
 (ffi/defcfn p-recv        "recv"        [:int :pointer :size_t :int] :ssize_t :blocking)
 (ffi/defcfn p-send        "send"        [:int :pointer :size_t :int] :ssize_t :blocking)
+(ffi/defcfn p-try-recv    "recv"        [:int :pointer :size_t :int] :ssize_t)
+(ffi/defcfn p-try-send    "send"        [:int :pointer :size_t :int] :ssize_t)
+;; POSIX readiness support. fcntl is variadic in C; the operations used here
+;; accept an int third argument, so a fixed three-int declaration is exact for
+;; this bounded surface. nfds_t differs by platform: glibc uses unsigned long
+;; (size_t on supported LP64 Linux), while Darwin uses unsigned int.
+(ffi/defcfn p-fcntl       "fcntl"       [:int :int :int] :int)
+(ffi/defcfn p-pipe        "pipe"        [:pointer] :int)
+(ffi/defcfn p-poll-size   "poll"        [:pointer :size_t :int] :int :blocking)
+(ffi/defcfn p-poll-uint   "poll"        [:pointer :uint :int] :int :blocking)
+(ffi/defcfn p-read        "read"        [:int :pointer :size_t] :ssize_t)
+(ffi/defcfn p-write       "write"       [:int :pointer :size_t] :ssize_t)
 
 ;; --- Winsock ----------------------------------------------------------------
 ;; SOCKET is :uptr, and socklen is int rather than socklen_t.
@@ -75,6 +88,11 @@
 (def descriptor (t/descriptor))
 
 (def ^:private windows? (= :windows (:platform descriptor)))
+(def ^:private p-poll
+  (case (:nfds-type descriptor)
+    :size_t p-poll-size
+    :uint p-poll-uint
+    nil))
 
 (def call
   (if windows?
@@ -83,9 +101,12 @@
      :getsockname w-getsockname :getpeername w-getpeername
      :setsockopt w-setsockopt :recv w-recv :send w-send}
     {:socket p-socket :bind p-bind :listen p-listen :accept p-accept
+     :try-accept p-try-accept
      :connect p-connect :close p-close :shutdown p-shutdown
      :getsockname p-getsockname :getpeername p-getpeername
-     :setsockopt p-setsockopt :recv p-recv :send p-send}))
+     :setsockopt p-setsockopt :recv p-recv :send p-send
+     :try-recv p-try-recv :try-send p-try-send
+     :fcntl p-fcntl :pipe p-pipe :poll p-poll :read p-read :write p-write}))
 
 (defn invoke
   "Call the platform's implementation of `op`. Named ops rather than direct vars

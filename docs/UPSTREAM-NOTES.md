@@ -6,17 +6,20 @@ accepted design spike.
 
 ## Fork prerequisites
 
-jolt-net cannot load on released `joltc` v0.4.15. It requires three primitives added
+jolt-net cannot load on released `joltc` v0.4.15. It requires five primitives added
 on the fork branch `codex/upstream-improvements-6-8`:
 
 | Primitive | Commit | Why jolt-net needs it |
 |---|---|---|
-| `jolt.host/monotonic-nanos`, `System/nanoTime` over a real monotonic clock | `feat: add a real monotonic clock behind nanoTime` | Deadlines. The previous `nanoTime` was `currentTimeMillis * 1e6` — wall-clock and millisecond-truncated, so it could step backwards and could not resolve a sub-millisecond interval at all. |
-| `:int16` / `:uint16` / `:short` / `:ushort` foreign types | `feat: add 16-bit and signed 8-bit foreign types` | `sockaddr_in.sin_family` and the `sockaddr_in6` fields are 16-bit. Without them the only option was the endian-dependent short-packing hack in `teensyp.ffi-net`. |
-| `jolt.ffi/errno` | `feat: add jolt.ffi/errno native error capture` | The whole error contract rests on reading the native error before any other native call. |
+| `jolt.host/target` | `3105198a` | Select exact fail-closed ABI facts instead of inferring them from the build host. |
+| `jolt.host/monotonic-nanos`, `System/nanoTime` over a real monotonic clock | `1670dfde` | Deadlines. The previous `nanoTime` was `currentTimeMillis * 1e6` — wall-clock and millisecond-truncated, so it could step backwards and could not resolve a sub-millisecond interval at all. |
+| `:int16` / `:uint16` / `:short` / `:ushort` foreign types | `55160f2c` | `sockaddr_in.sin_family` and the `sockaddr_in6` fields are 16-bit. Without them the only option was the endian-dependent short-packing hack in `teensyp.ffi-net`. |
+| `jolt.ffi/errno` | `5422ee9d` | The whole error contract rests on reading the native error before any other native call. |
+| `jolt.ffi/with-byte-array-pointer` | `1c8fdb97` | Pins a validated interior array slice for one callback, eliminating partial-I/O allocation and copying without exposing an unsafe retained pointer. |
 
-These were pushed upstream rather than implemented inside jolt-net because each is a
-shared FFI/host platform concern that all three existing socket stacks re-derive.
+These live in the proposed fork rather than inside jolt-net because each is a
+shared FFI/host platform concern. Nothing in this branch has been pushed to the
+core project's origin.
 
 ## Hard runtime prerequisite: lazy `defcfn`
 

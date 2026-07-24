@@ -3,6 +3,7 @@
  :pointer-bits 64
  :socket-handle-bytes 8
  :socklen-bytes 4
+ :nfds-bytes nil
  :const {
   :af-unspec 0
   :af-inet 2

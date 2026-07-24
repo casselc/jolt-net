@@ -1,8 +1,8 @@
 #!/bin/sh
 # jnc — run jolt-net against the local jolt fork.
 #
-# jolt-net cannot be built by the released joltc: it needs (jolt.host/target),
-# jolt.ffi/errno, and the 16-bit foreign types, none of which exist in v0.4.15.
+# jolt-net cannot be built by the released joltc: it needs the fork's target,
+# clock, errno, 16-bit-type, and scoped array-slice primitives.
 # A bare `joltc` on PATH would fail with an unbound-var error far from the cause,
 # so this wrapper pins the fork and says so plainly if it is missing.
 #
@@ -41,8 +41,7 @@ JOLTC="${JOLT_UPSTREAM:-}/bin/joltc"
 
 if [ ! -x "$JOLTC" ]; then
     echo "jnc: could not find a jolt fork checkout with bin/joltc." >&2
-    echo "jnc: jolt-net requires the local fork (jolt.host/target," >&2
-    echo "     jolt.ffi/errno, 16-bit FFI types) on branch" >&2
+    echo "jnc: jolt-net requires the local fork's host/FFI primitives on branch" >&2
     echo "     codex/upstream-improvements-6-8. The released joltc on PATH" >&2
     echo "     cannot load this library. Set JOLT_UPSTREAM to the checkout." >&2
     echo "     See docs/UPSTREAM-NOTES.md." >&2

@@ -26,6 +26,8 @@
 (defn- handle-bytes [d] (if (= :uptr (:handle-type d)) 8 4))
 (defn- addrlen-bytes [d]
   (if (= :size_t (get-in d [:layout :addrinfo :addrlen-type])) 8 4))
+(defn- nfds-bytes [d]
+  (case (:nfds-type d) :size_t 8 :uint 4 nil))
 
 (defn- diff-map
   "Keys whose values differ, as {k [expected actual]}. Only keys present in the
@@ -53,6 +55,9 @@
         (c/check (str label ": sockaddr_in6 layout matches")
                  {} (diff-map (get-in probe [:layout :sockaddr-in6])
                               (get-in d [:layout :sockaddr-in6])))
+        (when-let [pollfd (get-in probe [:layout :pollfd])]
+          (c/check (str label ": pollfd layout matches")
+                   {} (diff-map pollfd (get-in d [:layout :pollfd]))))
         ;; addrinfo carries the field ORDER difference that bites in practice:
         ;; Linux puts ai_addr before ai_canonname, Windows and macOS the reverse.
         (c/check (str label ": addrinfo layout matches")
@@ -64,6 +69,8 @@
                  (get-in probe [:layout :sin-len?]) (:sin-len? d))
         (c/check (str label ": socket handle width matches")
                  (:socket-handle-bytes probe) (handle-bytes d))
+        (c/check (str label ": nfds_t width matches")
+                 (:nfds-bytes probe) (nfds-bytes d))
         (c/check (str label ": errno codes match") {} (diff-map (:errno probe) (:errno d)))
         (c/check (str label ": EAI_* codes match") {} (diff-map (:gai probe) (:gai d)))))))
 

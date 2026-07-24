@@ -10,6 +10,10 @@
  *
  * Build/run through tools/probe-constants.sh.
  */
+#ifndef _WIN32
+#  define _POSIX_C_SOURCE 200112L
+#endif
+
 #include <stdio.h>
 #include <stddef.h>
 
@@ -25,6 +29,7 @@
 #  include <netdb.h>
 #  include <errno.h>
 #  include <fcntl.h>
+#  include <poll.h>
 #  ifdef __APPLE__
 #    define OS_NAME "darwin"
 #  else
@@ -58,6 +63,11 @@ int main(void) {
 #endif
     );
     printf(" :socklen-bytes %zu\n", sizeof(socklen_t));
+#ifdef _WIN32
+    printf(" :nfds-bytes nil\n");
+#else
+    printf(" :nfds-bytes %zu\n", sizeof(nfds_t));
+#endif
 
     printf(" :const {\n");
     K(":af-unspec", AF_UNSPEC);
@@ -111,6 +121,13 @@ int main(void) {
 #else
     KNIL(":o-nonblock"); KNIL(":f-getfl"); KNIL(":f-setfl");
 #endif
+#ifndef _WIN32
+    K(":pollin", POLLIN);
+    K(":pollout", POLLOUT);
+    K(":pollerr", POLLERR);
+    K(":pollhup", POLLHUP);
+    K(":pollnval", POLLNVAL);
+#endif
     printf(" }\n");
 
     /* Struct layouts. Every offset a caller would otherwise hardcode. */
@@ -128,6 +145,13 @@ int main(void) {
            offsetof(struct sockaddr_in6, sin6_addr),
            offsetof(struct sockaddr_in6, sin6_scope_id));
     printf("  :sockaddr-storage {:size %zu}\n", sizeof(struct sockaddr_storage));
+#ifndef _WIN32
+    printf("  :pollfd {:size %zu :fd %zu :events %zu :revents %zu}\n",
+           sizeof(struct pollfd),
+           offsetof(struct pollfd, fd),
+           offsetof(struct pollfd, events),
+           offsetof(struct pollfd, revents));
+#endif
     printf("  :addrinfo {:size %zu :flags %zu :family %zu :socktype %zu :protocol %zu :addrlen %zu :canonname %zu :addr %zu :next %zu :addrlen-bytes %zu}\n",
            sizeof(struct addrinfo),
            offsetof(struct addrinfo, ai_flags),

@@ -25,6 +25,7 @@
    :evidence :probed
    :handle-type :int                 ; POSIX fd
    :socklen-type :uint
+   :nfds-type :size_t                ; glibc nfds_t is unsigned long
    :invalid-handle -1
    :sin-len? false
 
@@ -37,11 +38,13 @@
            :shut-rd 0 :shut-wr 1 :shut-rdwr 2
            ;; Linux suppresses SIGPIPE per send() call; there is no SO_NOSIGPIPE.
            :msg-nosignal 16384 :so-nosigpipe nil
-           :o-nonblock 2048 :f-getfl 3 :f-setfl 4}
+           :o-nonblock 2048 :f-getfl 3 :f-setfl 4
+           :pollin 1 :pollout 4 :pollerr 8 :pollhup 16 :pollnval 32}
 
    :layout {:sockaddr-in {:size 16 :family 0 :port 2 :addr 4}
             :sockaddr-in6 {:size 28 :family 0 :port 2 :flowinfo 4 :addr 8 :scope-id 24}
             :sockaddr-storage {:size 128}
+            :pollfd {:size 8 :fd 0 :events 4 :revents 6}
             ;; NOTE: Linux orders ai_addr BEFORE ai_canonname; Windows and macOS
             ;; do the reverse. Hardcoding either set is a silent cross-platform bug.
             :addrinfo {:size 48 :flags 0 :family 4 :socktype 8 :protocol 12
@@ -69,6 +72,7 @@
    ;; type are both invalid tests -- only equality with INVALID_SOCKET works.
    :handle-type :uptr
    :socklen-type :int
+   :nfds-type nil
    :invalid-handle 18446744073709551615  ; (2^64)-1, all bits one
    :sin-len? false
 
@@ -119,6 +123,7 @@
    :evidence :probed
    :handle-type :int
    :socklen-type :uint
+   :nfds-type :uint                  ; Darwin nfds_t is unsigned int
    :invalid-handle -1
    ;; BSD-derived: sockaddr byte 0 is the struct length and byte 1 the family,
    ;; so sin_family sits at offset 1, not 0.
@@ -136,11 +141,13 @@
            ;; 0x4000) and SO_NOSIGPIPE per socket. This table originally said
            ;; MSG_NOSIGNAL was absent here -- CI probing a real Mac corrected it.
            :msg-nosignal 524288 :so-nosigpipe 4130
-           :o-nonblock 4 :f-getfl 3 :f-setfl 4}
+           :o-nonblock 4 :f-getfl 3 :f-setfl 4
+           :pollin 1 :pollout 4 :pollerr 8 :pollhup 16 :pollnval 32}
 
    :layout {:sockaddr-in {:size 16 :family 1 :port 2 :addr 4}
             :sockaddr-in6 {:size 28 :family 1 :port 2 :flowinfo 4 :addr 8 :scope-id 24}
             :sockaddr-storage {:size 128}
+            :pollfd {:size 8 :fd 0 :events 4 :revents 6}
             :addrinfo {:size 48 :flags 0 :family 4 :socktype 8 :protocol 12
                        :addrlen 16 :canonname 24 :addr 32 :next 40
                        :addrlen-type :uint}}
