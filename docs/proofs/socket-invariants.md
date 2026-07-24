@@ -168,6 +168,47 @@ count second. Once close observes zero admitted writers, no thread can still iss
 The forced-interleaving runtime test holds one admitted writer across close and
 proves close cannot retire the read end until that writer releases.
 
+**Non-blocking transition invariant.** Every lease proof above has a premise
+that is easy to overlook: an operation called “short” must really be
+non-blocking at the native boundary. `fcntl` is declared in C as
+`fcntl(int, int, ...)`. Giving Jolt three typed arguments does not make it a
+fixed-arity C function. In particular, Apple arm64 places arguments after `...`
+on the stack while a fixed third argument would still use a register.
+
+The original binding omitted that ABI boundary and marked a handle
+non-blocking from `F_SETFL`'s return code alone. A Darwin accept could therefore
+park inside `accept(2)` while retaining the listener lease: listener close
+returned after deferring native close, but the accept could neither return nor
+release the lease. This was the missing premise in the earlier accept analysis,
+not a counterexample to the poller-close ordering once await had actually begun.
+
+The core fork now exposes `{:varargs-after 2}` on `jolt.ffi/defcfn`, which lowers
+to Chez's `(__varargs_after 2)` convention. jolt-net additionally reads
+`F_GETFL` after `F_SETFL` and does not mark or return a handle unless
+`O_NONBLOCK` is observable. The read-back is intentionally retained even with
+the corrected ABI declaration: it makes a future compiler, libc, or binding
+regression fail closed before any short lease is admitted.
+
+- `nonblocking-transition-buggy.smt2` is **sat**: fixed-arity declaration,
+  apparent `F_SETFL` success, absent `O_NONBLOCK`, marked handle, and a
+  blocking-capable accept are all present in one witness.
+- `nonblocking-transition-corrected.smt2` makes both violation branches
+  **unsat**: the Apple-arm64 declaration has the explicit boundary, and
+  admission without the observed bit contradicts the mark postcondition. The
+  solver leaves `nonblocking_observed` unconstrained, so this is a fail-closed
+  safety result rather than an assumption that the syscall must work.
+- `nonblocking-transition-nonvacuity.smt2` is **sat** when read-back observes
+  the bit; the handle is marked and a useful short operation is admitted.
+
+The runtime counterpart independently calls `F_GETFL` on a newly returned
+listener and requires `O_NONBLOCK` before the rest of the poller suite runs. It
+also injects the motivating bad outcome—apparent `F_SETFL` success followed by
+a read-back without the bit—and requires a fail-closed exception after the
+second `F_GETFL`. The core FFI test exercises the same variadic `fcntl` binding
+and transition. Only a Darwin arm64 runtime rerun can close the
+platform-specific ABI evidence; the SMT model does not pretend to model Apple's
+calling convention.
+
 **Wake-epoch invariant.** A Boolean-only coalescing gate has another independent
 race. Await can drain the old byte, a producer can observe the old `true` gate
 and omit its write, and await can then reset the gate and park with no byte for
@@ -184,12 +225,12 @@ where drain captured the newer epoch.
 - `wake-epoch-nonvacuity.smt2` is **sat** for the hard case where the producer
   really coalesces, drain restores the byte, and await progresses.
 
-**Accept-terminal invariant.** A registration-removal wake is intentionally a
-best-effort state-change notification, not a cancellation boundary. Listener
-close can race just before accept enters `await-ready`: the already-published
-wake is then a pre-entry epoch, may be drained before the native snapshot, and
-cannot guarantee prompt accept completion. The macOS source-built Chez gate
-exposed this schedule as a blocking accept that outlived listener close.
+**Accept-terminal invariant.** Given the verified non-blocking transition
+above, a registration-removal wake is intentionally a best-effort state-change
+notification, not a cancellation boundary. Listener close can race just before
+accept enters `await-ready`: the already-published wake is then a pre-entry
+epoch, may be drained before the native snapshot, and cannot by itself
+guarantee prompt accept completion.
 
 `accept` therefore owns a second close listener whose only job is terminal:
 it calls `poller/close!`. The listener installs this callback before poller
@@ -225,6 +266,72 @@ neighboring callback.
 
 ---
 
+## 4. Non-blocking connect ownership survives completion
+
+**Bounded claim.** For one initiation and at most one completion:
+
+1. a synchronous failure returns no socket and rolls its raw descriptor back;
+2. immediate success and `EINPROGRESS` each return exactly one caller-owned
+   non-blocking socket;
+3. `finish-connect!` neither closes nor transfers that ownership when
+   `SO_ERROR` is zero or nonzero; and
+4. when caller close races an admitted `finish-connect!`, native close occurs
+   only after the `getsockopt(SO_ERROR)` lease releases.
+
+**Why it needs a proof.** `EINPROGRESS` is a successful *ownership transfer*
+even though the connection is not yet successful. Treating it like an ordinary
+failure leaks or prematurely closes the descriptor. At the other boundary,
+readiness is only permission to inspect `SO_ERROR`; concurrent socket close must
+not recycle the descriptor between selecting it and that inspection. Finally,
+an asynchronous refusal does not grant `finish-connect!` permission to consume
+the caller's close responsibility.
+
+**Live source facts.** `try-connect-address` performs non-blocking setup and the
+native call before `h/own`; its catch closes only a raw, unreturned descriptor.
+Both result values then pass through the same `h/own` expression.
+`finish-connect!` wraps allocation, `getsockopt`, and the `SO_ERROR` read in
+`h/with-lease`, and has no `close!` call. The handle lease's existing CAS/drain
+protocol supplies the native-close ordering.
+
+**Verified models and controls.**
+
+- `connect-ownership-completion-buggy.smt2` is **sat**. Its concrete witness
+  returns `in_progress` with `owner_count_after_constructor = 0`, closes at step
+  2 before `getsockopt` at step 3, and lets completion failure take close
+  ownership.
+- `connect-ownership-completion-corrected.smt2` is **unsat** for the asserted
+  violation. The named core contains the return/rollback/ownership equivalences,
+  completion owner preservation, lease admission, `getsockopt`-inside-lease,
+  drain-before-native-close, all four violation definitions, and the violation
+  query.
+- `connect-ownership-completion-nonvacuity.smt2` is **sat** for the hard valid
+  scenario: `EINPROGRESS`, asynchronous failure, and caller close crossing the
+  completion lease with event order
+  acquire/close/getsockopt/release/native-close = `0/1/2/3/4`. Both owner counts
+  remain one and completion initiates no close.
+
+The finite model has one socket, one completion, one closer, five distinct event
+positions, and atomic atom/lease transitions. It omits repeated completion
+polls, multiple close callers, kernel `SO_ERROR` behavior, resolver scheduling,
+and weak memory below atom linearizability.
+
+The executable companion in `jolt.net.poller-test` pins immediate and
+in-progress classification, completes a real loopback connect only after
+readiness plus `SO_ERROR`, observes real `ECONNREFUSED`, proves a completion
+failure leaves the returned socket open for exactly one caller close, and
+repeats 50 pre-transfer failures to detect descriptor leaks. Its connector
+helper recomputes finite waits from one absolute monotonic deadline.
+
+Resolver-candidate policy is deliberately not reduced to a solver model.
+`try-connect` returns every untried owned resolved-address value; synchronous
+attempt failures retain and ultimately throw the last real exception. An
+asynchronous failure is the most recent real exception, and the connector can
+close that attempt and pass the returned remainder back to `try-connect`.
+Runtime resolver-order and native-code checks are the stronger oracle for that
+data-flow property.
+
+---
+
 ## What is deliberately not modelled
 
 - **Resolver copy-before-free.** This is a memory-lifetime property, and the
@@ -235,6 +342,10 @@ neighboring callback.
 - **Struct layouts.** Not a logic property. These are checked against the
   platform's own headers by `tools/probe-constants.sh`, which is ground truth
   rather than a model of it.
+- **Native calling conventions.** The non-blocking model proves the source-level
+  admission and fail-closed postcondition. The core FFI regression and Darwin
+  runtime gate, not SMT, are the evidence that Chez's variadic convention maps
+  to the platform ABI.
 - **Interrupted syscalls and process signals.** The invariant models do not
   pretend to model kernel signal delivery. Deterministic syscall hooks verify
   `EINTR` retry and absolute-deadline expiry, while a subprocess writes after

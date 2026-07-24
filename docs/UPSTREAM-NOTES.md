@@ -6,7 +6,7 @@ accepted design spike.
 
 ## Fork prerequisites
 
-jolt-net cannot load on released `joltc` v0.4.15. It requires five primitives added
+jolt-net cannot load on released `joltc` v0.4.15. It requires six primitives added
 on the fork branch `codex/upstream-improvements-6-8`:
 
 | Primitive | Commit | Why jolt-net needs it |
@@ -16,6 +16,7 @@ on the fork branch `codex/upstream-improvements-6-8`:
 | `:int16` / `:uint16` / `:short` / `:ushort` foreign types | `55160f2c` | `sockaddr_in.sin_family` and the `sockaddr_in6` fields are 16-bit. Without them the only option was the endian-dependent short-packing hack in `teensyp.ffi-net`. |
 | `jolt.ffi/errno` | `5422ee9d` | The whole error contract rests on reading the native error before any other native call. |
 | `jolt.ffi/with-byte-array-pointer` | `1c8fdb97` | Pins a validated interior array slice for one callback, eliminating partial-I/O allocation and copying without exposing an unsafe retained pointer. |
+| `{:varargs-after n}` on `jolt.ffi/defcfn` | `ecf7728f` | Lowers an explicit fixed/variadic boundary to Chez. Apple arm64 passes `fcntl`'s third argument according to the variadic ABI even though its Jolt type is known. |
 
 These live in the proposed fork rather than inside jolt-net because each is a
 shared FFI/host platform concern. Nothing in this branch has been pushed to the

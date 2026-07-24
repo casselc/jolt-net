@@ -31,20 +31,23 @@
 (ffi/defcfn p-accept      "accept"      [:int :pointer :pointer] :int :blocking)
 (ffi/defcfn p-try-accept  "accept"      [:int :pointer :pointer] :int)
 (ffi/defcfn p-connect     "connect"     [:int :pointer :uint] :int :blocking)
+(ffi/defcfn p-try-connect "connect"     [:int :pointer :uint] :int)
 (ffi/defcfn p-close       "close"       [:int] :int)
 (ffi/defcfn p-shutdown    "shutdown"    [:int :int] :int)
 (ffi/defcfn p-getsockname "getsockname" [:int :pointer :pointer] :int)
 (ffi/defcfn p-getpeername "getpeername" [:int :pointer :pointer] :int)
 (ffi/defcfn p-setsockopt  "setsockopt"  [:int :int :int :pointer :uint] :int)
+(ffi/defcfn p-getsockopt  "getsockopt"  [:int :int :int :pointer :pointer] :int)
 (ffi/defcfn p-recv        "recv"        [:int :pointer :size_t :int] :ssize_t :blocking)
 (ffi/defcfn p-send        "send"        [:int :pointer :size_t :int] :ssize_t :blocking)
 (ffi/defcfn p-try-recv    "recv"        [:int :pointer :size_t :int] :ssize_t)
 (ffi/defcfn p-try-send    "send"        [:int :pointer :size_t :int] :ssize_t)
-;; POSIX readiness support. fcntl is variadic in C; the operations used here
-;; accept an int third argument, so a fixed three-int declaration is exact for
-;; this bounded surface. nfds_t differs by platform: glibc uses unsigned long
-;; (size_t on supported LP64 Linux), while Darwin uses unsigned int.
-(ffi/defcfn p-fcntl       "fcntl"       [:int :int :int] :int)
+;; POSIX readiness support. fcntl is variadic in C. Its third argument remains
+;; typed :int for this bounded F_GETFL/F_SETFL surface, but the ABI must still
+;; name the two-fixed-argument boundary: Apple arm64 places `...` arguments on
+;; the stack even when a fixed third argument would have occupied a register.
+(ffi/defcfn p-fcntl       "fcntl"       [:int :int :int] :int
+  {:varargs-after 2})
 (ffi/defcfn p-pipe        "pipe"        [:pointer] :int)
 (ffi/defcfn p-poll-size   "poll"        [:pointer :size_t :int] :int :blocking)
 (ffi/defcfn p-poll-uint   "poll"        [:pointer :uint :int] :int :blocking)
@@ -102,9 +105,11 @@
      :setsockopt w-setsockopt :recv w-recv :send w-send}
     {:socket p-socket :bind p-bind :listen p-listen :accept p-accept
      :try-accept p-try-accept
-     :connect p-connect :close p-close :shutdown p-shutdown
+     :connect p-connect :try-connect p-try-connect
+     :close p-close :shutdown p-shutdown
      :getsockname p-getsockname :getpeername p-getpeername
-     :setsockopt p-setsockopt :recv p-recv :send p-send
+     :setsockopt p-setsockopt :getsockopt p-getsockopt
+     :recv p-recv :send p-send
      :try-recv p-try-recv :try-send p-try-send
      :fcntl p-fcntl :pipe p-pipe :poll p-poll :read p-read :write p-write}))
 

@@ -17,12 +17,12 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 
 ## Current state
 
-| Platform | Constants / layouts | Blocking socket base | Non-blocking I/O + poller | Notes |
+| Platform | Constants / layouts | Blocking socket base | Non-blocking I/O + poller/connect | Notes |
 |---|---|---|---|---|
-| Linux x86-64 | **probed** | **runtime** | **runtime** | The development and CI platform. Real `fcntl`, `poll`, pipe-wake, sliced byte I/O, EOF, mutation wake, and close races are exercised. |
+| Linux x86-64 | **probed** | **runtime** | **runtime** | The development and CI platform. Real `fcntl`, `poll`, pipe-wake, sliced byte I/O, EOF, non-blocking connect/`SO_ERROR`, mutation wake, and close races are exercised. |
 | Linux aarch64 | table | none | none | Aliases the x86-64 socket facts: same kernel UAPI, same LP64. An explicit table entry with the checked facts listed — never a `:linux` fallback. |
 | Windows x86-64 | **probed** | none | none | Probed on a real Windows CI runner (and independently via mingw + WSL interop, which agree). Numbers are trustworthy; **no Winsock call has ever been made from jolt on Windows** — there is no packaged Chez Scheme for Windows runners, so the suite cannot run there yet. |
-| macOS arm64 | **probed** | **runtime** | **candidate** | Uses `poll(2)`, `fcntl`, and the same owner-independent self-pipe protocol as Linux, with Darwin's distinct 32-bit `nfds_t` binding. The complete native suite is a required macOS CI gate for this revision. |
+| macOS arm64 | **probed** | **runtime** | **candidate** | Uses `poll(2)`, a variadic-ABI-correct `fcntl`, and the same owner-independent self-pipe protocol as Linux, with Darwin's distinct 32-bit `nfds_t` binding. The complete native suite is a required macOS CI gate for this revision. |
 | macOS x86-64 | **table** | none | none | Shares the arm64 descriptor: these are SDK facts rather than arch facts on macOS. Only arm64 is machine-checked. |
 
 ## Specific residuals
@@ -33,10 +33,15 @@ Do not summarize this file as "supports Linux, macOS and Windows."
   predicate but not the FFI marshaling of a `:uptr` result ≥ 2^63.
 - **`WSAStartup` once-only initialization** is unexercised.
 - **Windows readiness** still needs `ioctlsocket(FIONBIO)`, `WSAPoll`, and a
-  tested owner-independent wake transport such as a loopback UDP pair.
-- **macOS readiness validation.** The implementation uses only APIs present on
-  both POSIX targets, but support remains a candidate until the complete poller,
-  close-race, SIGPIPE, and sliced-I/O suite passes on the macOS runner for this
+  tested owner-independent wake transport such as a loopback UDP pair. The
+  non-blocking connect API fails closed before resolution or socket creation on
+  Windows until that backend and real `getsockopt(SO_ERROR)` calls are verified.
+- **macOS readiness validation.** The earlier gate showed that a typed
+  three-argument signature is not enough for variadic `fcntl` on Apple arm64:
+  the third argument uses the variadic stack ABI. The core binding now declares
+  `{:varargs-after 2}`, and jolt-net reads `F_GETFL` back before marking a
+  handle. Support remains a candidate until the complete poller, close-race,
+  SIGPIPE, and sliced-I/O suite passes on the macOS runner for this exact
   revision. There is no fallback to the old uninterruptible accept path.
 - **Readiness hot-path shape.** Listener, connected, and accepted descriptors
   enter nonblocking mode once. A scoped core FFI primitive pins and exposes the
@@ -46,6 +51,14 @@ Do not summarize this file as "supports Linux, macOS and Windows."
   monotonic deadline; interruption does not restart or extend the caller's
   timeout. Wake-pipe reads and writes also retry `EINTR` while retaining the
   same short handle lease and native buffer.
+- **Connect deadlines.** `try-connect` itself never accepts a relative timeout.
+  It returns the owned socket, selected address, exact initiation status, and
+  untried resolver candidates. A connector registers the socket for write
+  readiness, recomputes each finite wait from one absolute monotonic deadline,
+  and calls `finish-connect!`; only `SO_ERROR == 0` is success. The runtime suite
+  exercises immediate/in-progress classification, real loopback completion and
+  refusal, caller-retained ownership after completion failure, rollback leak
+  detection, and this absolute-deadline composition.
 - **Darwin `nfds_t`.** The probe records the width and the call table selects an
   exact binding: `:size_t` on supported LP64 Linux and `:uint` on Darwin.
 - **macOS `sin_len`.** BSD puts the struct size in byte 0 and the family in byte 1.
@@ -72,6 +85,11 @@ whole argument for doing it:
   Documentation commonly presents `SO_NOSIGPIPE` as the BSD mechanism, which is
   true but not exclusive. The wrong value was benign — the socket option path
   still suppresses SIGPIPE — but it was wrong, and only a real Mac could say so.
+
+The runtime gate caught a different class of problem that a header probe cannot:
+`fcntl`'s constants and return value were correct while its variadic calling
+convention was not. This is why the suite now checks the kernel-visible
+`O_NONBLOCK` postcondition rather than accepting `F_SETFL == 0` as sufficient.
 
 The table test is non-vacuous: corrupting `AF_INET6` or swapping
 `ai_addr`/`ai_canonname` makes it fail with the exact field named.

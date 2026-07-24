@@ -6,9 +6,9 @@
 ;; to open a plain TCP socket.
 ;;
 ;; REQUIRES THE LOCAL JOLT FORK. Released joltc v0.4.15 lacks the target,
-;; monotonic-clock, errno, 16-bit-type, and scoped array-slice primitives. Use
-;; bin/jnc, which points at the fork and fails with a readable message instead of
-;; an unbound-var error. See docs/UPSTREAM-NOTES.md.
+;; monotonic-clock, errno, 16-bit-type, scoped array-slice, and variadic-boundary
+;; primitives. Use bin/jnc, which points at the fork and fails with a readable
+;; message instead of an unbound-var error. See docs/UPSTREAM-NOTES.md.
 ;;
 ;; libc is resolved from the running process (:process true) because the socket
 ;; and resolver symbols live in the already-loaded process image. The Windows

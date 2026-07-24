@@ -11,10 +11,10 @@
       /platform and /message, where :kind is drawn from a small closed set and
       :code is the native code, ALWAYS preserved even when no kind maps to it.
 
-  Blocking connect and accept remain available and take no deadline. A correct
-  connect timeout needs a non-blocking connect completed through SO_ERROR plus a
-  poller, and shipping a :timeout-ms that silently did not bound the syscall
-  would be worse than not offering one."
+  Blocking connect and accept remain available and take no deadline.
+  Non-blocking connect initiation and SO_ERROR completion are separate so a
+  connector can compose them with one absolute monotonic deadline through the
+  poller without hiding resolver or cancellation policy in this substrate."
   (:require [jolt.ffi :as ffi]
             [jolt.net.target :as t]
             [jolt.net.ffi :as nffi]
@@ -22,6 +22,7 @@
             [jolt.net.address :as addr]
             [jolt.net.resolver :as res]
             [jolt.net.handle :as h]
+            [jolt.net.nonblocking :as nb]
             [jolt.net.poller :as poller]))
 
 (def ^:private d nffi/descriptor)
@@ -30,9 +31,12 @@
 (def would-block err/would-block)
 (def eof err/eof)
 (def in-progress err/in-progress)
+(def connected err/connected)
 (def would-block? err/would-block?)
 (def eof? err/eof?)
 (def eof-value? err/eof?)
+(def in-progress? err/in-progress?)
+(def connected? err/connected?)
 
 (defn target-descriptor
   "This host's socket ABI facts, for diagnostics and tests."
@@ -115,27 +119,15 @@
                      :jolt.net/kind :unsupported-target
                      :jolt.net/target (jolt.host/target)}))))
 
-(defn- set-nonblocking-raw! [raw ctx]
-  (require-posix-nonblocking-runtime! :set-nonblocking)
-  (let [flags (err/checked :fcntl-getfl neg?
-                           #(nffi/invoke :fcntl raw
-                                         (t/const d :f-getfl) 0)
-                           ctx)]
-    (err/checked :fcntl-setfl neg?
-                 #(nffi/invoke :fcntl raw
-                               (t/const d :f-setfl)
-                               (bit-or flags (t/const d :o-nonblock)))
-                 ctx))
-  nil)
-
 (defn- with-nonblocking-lease [sock f]
+  (require-posix-nonblocking-runtime! :set-nonblocking)
   (h/with-lease
     sock
     (fn [raw generation]
       (when-not (h/nonblocking? sock)
         ;; Two first users can race here; duplicate F_GETFL/F_SETFL operations
         ;; are harmless and the successful transition is monotonic.
-        (set-nonblocking-raw! raw nil)
+        (nb/set-raw! raw)
         (h/mark-nonblocking! sock))
       (f raw generation))))
 
@@ -186,7 +178,7 @@
          (err/checked :listen neg?
                       #(nffi/invoke :listen raw (or (:backlog opts) 128)) ctx)
          (when (poller-runtime?)
-           (set-nonblocking-raw! raw ctx))
+           (nb/set-raw! raw ctx))
          ;; ownership transfers only on success
          (let [listener
                (h/own raw :listener
@@ -256,6 +248,19 @@
   (or (= code (t/errno-code d :eagain))
       (= code (t/errno-code d :ewouldblock))))
 
+(defn- connect-in-progress-code? [code]
+  (or (= code (t/errno-code d :einprogress))
+      (would-block-code? code)))
+
+(defn- connect-initiation-status
+  "Pure decision seam kept small enough for deterministic branch tests. `code`
+  is already captured when rc is negative; this function makes no native call."
+  [rc code ctx]
+  (cond
+    (not (neg? rc)) connected
+    (connect-in-progress-code? code) in-progress
+    :else (throw (err/native-ex :connect code ctx))))
+
 (defn try-accept
   "Accept one connection without waiting. This switches the listener and the
   accepted socket to non-blocking mode. Returns an owned socket or
@@ -274,7 +279,7 @@
                (throw (err/native-ex :accept code nil))))
            (try
              (apply-options! c opts nil)
-             (set-nonblocking-raw! c nil)
+             (nb/set-raw! c)
              (let [socket (h/own c :socket {})]
                (h/mark-nonblocking! socket)
                socket)
@@ -303,7 +308,7 @@
                      (fn [p len]
                        (err/checked :connect neg? #(nffi/invoke :connect raw p len) ctx)))
                    (when (poller-runtime?)
-                     (set-nonblocking-raw! raw ctx))
+                     (nb/set-raw! raw ctx))
                    (let [socket
                          (h/own raw :socket
                                 {:jolt.net/family (:jolt.net/family a)})]
@@ -316,6 +321,194 @@
            (if (and (map? r) (::failed r))
              (recur more (::failed r))
              r)))))))
+
+(defn- resolved-address? [x]
+  (let [family (:jolt.net/family x)
+        bytes (:jolt.net/sockaddr x)
+        len (:jolt.net/sockaddr-len x)
+        expected (case family
+                   :inet (:size (t/layout d :sockaddr-in))
+                   :inet6 (:size (t/layout d :sockaddr-in6))
+                   nil)]
+    (and (map? x)
+         expected
+         (bytes? bytes)
+         (integer? len)
+         (= expected len)
+         (= len (alength bytes)))))
+
+(defn- connect-address-context [resolved]
+  {:jolt.net/endpoint
+   {:jolt.net/host (:jolt.net/host resolved)
+    :jolt.net/port (:jolt.net/port resolved)
+    :jolt.net/family (:jolt.net/family resolved)}})
+
+(defn- connect-addresses [endpoint-or-addresses opts]
+  (cond
+    (resolved-address? endpoint-or-addresses)
+    [endpoint-or-addresses]
+
+    (and (map? endpoint-or-addresses)
+         (contains? endpoint-or-addresses :jolt.net/sockaddr))
+    (throw (err/invalid-ex
+             :connect
+             "malformed resolved-address value"
+             {:jolt.net/value endpoint-or-addresses}))
+
+    ;; An endpoint is intentionally accepted for the common case. A connector
+    ;; that already resolved once can instead pass the owned address vector,
+    ;; avoiding a second blocking resolver call while it advances candidates.
+    (map? endpoint-or-addresses)
+    (res/resolve endpoint-or-addresses opts)
+
+    (sequential? endpoint-or-addresses)
+    (let [addresses (vec endpoint-or-addresses)]
+      (when-not (every? resolved-address? addresses)
+        (throw (err/invalid-ex
+                 :connect
+                 "connect candidates must be resolved-address values"
+                 {:jolt.net/candidates endpoint-or-addresses})))
+      addresses)
+
+    :else
+    (throw (err/invalid-ex
+             :connect
+             "expected an endpoint, resolved address, or sequence of resolved addresses"
+             {:jolt.net/value endpoint-or-addresses}))))
+
+(defn- try-connect-address [resolved opts]
+  (let [ctx (connect-address-context resolved)
+        raw (socket-for resolved ctx)
+        status
+        (try
+          (apply-options! raw opts ctx)
+          (nb/set-raw! raw ctx)
+          (with-sockaddr
+            resolved
+            (fn [p len]
+              (let [rc (nffi/invoke :try-connect raw p len)]
+                (if (neg? rc)
+                  ;; Capture before with-sockaddr frees its scratch pointer and
+                  ;; before rollback closes the raw socket.
+                  (let [code (err/capture)]
+                    (connect-initiation-status rc code ctx))
+                  (connect-initiation-status rc nil ctx)))))
+          (catch :default e
+            (h/raw-close! raw)
+            (throw e)))]
+    ;; Ownership transfers for BOTH successful initiation outcomes. The caller
+    ;; must therefore close the returned socket even when completion later
+    ;; reports a native failure.
+    (let [socket
+          (try
+            (h/own raw :socket
+                   {:jolt.net/family (:jolt.net/family resolved)
+                    :jolt.net/connect-address resolved})
+            (catch :default e
+              (h/raw-close! raw)
+              (throw e)))]
+      (h/mark-nonblocking! socket)
+      {:jolt.net/socket socket
+       :jolt.net/status status
+       :jolt.net/address resolved})))
+
+(defn- try-connect-candidates
+  "Resolver-order loop separated so its last-error/remaining-candidate contract
+  has a deterministic semantic test independent of kernel connect timing."
+  [addresses opts attempt-fn]
+  (loop [[address & more] addresses last-ex nil]
+    (if-not address
+      (throw last-ex)
+      (let [result (try
+                     {:attempt (attempt-fn address opts)}
+                     (catch :default e {:error e}))]
+        (if-let [e (:error result)]
+          (if (seq more)
+            (recur more e)
+            (throw e))
+          (assoc (:attempt result)
+                 :jolt.net/remaining-addresses (vec more)))))))
+
+(defn try-connect
+  "Initiate a POSIX non-blocking connect.
+
+  `endpoint-or-addresses` may be an endpoint, one value returned by `resolve`,
+  or a sequence of resolved addresses. Resolver order is preserved. Synchronous
+  failures close their unowned socket and advance to the next candidate; if all
+  candidates fail, the LAST REAL native exception is thrown.
+
+  Returns:
+
+    {:jolt.net/socket              <owned non-blocking socket>
+     :jolt.net/status              ::connected or ::in-progress
+     :jolt.net/address             <selected resolved address>
+     :jolt.net/remaining-addresses <untried resolved addresses>}
+
+  The socket is caller-owned for either status. If status is ::in-progress,
+  register it for :write readiness (error/hangup are reported independently),
+  wait against the caller's absolute monotonic deadline, then call
+  `finish-connect!`. On asynchronous failure, close this socket and continue
+  with :jolt.net/remaining-addresses; this keeps address policy above the socket
+  substrate without losing candidates or replacing the last native error.
+
+  Windows fails closed until its non-blocking Winsock backend exists."
+  ([endpoint-or-addresses] (try-connect endpoint-or-addresses {}))
+  ([endpoint-or-addresses opts]
+   (require-posix-nonblocking-runtime! :try-connect)
+   (let [addresses (vec (connect-addresses endpoint-or-addresses opts))]
+     (when (empty? addresses)
+       (throw (err/invalid-ex :connect "endpoint resolved to no addresses"
+                              {:jolt.net/value endpoint-or-addresses})))
+     (try-connect-candidates addresses opts try-connect-address))))
+
+(defn finish-connect!
+  "Complete a non-blocking connect after write/error/hangup readiness.
+
+  Reads SO_ERROR while holding a short handle lease. Returns ::connected when
+  the pending error is zero, ::in-progress only when the platform still reports
+  an expected in-progress code, and otherwise throws the real pending native
+  connect error. This function never closes or transfers the socket: ownership
+  remains with the caller on every return and throw path.
+
+  SO_ERROR is meaningful as a completion oracle AFTER readiness; calling this
+  before readiness is outside the contract because a zero pending error does
+  not portably prove that connect has completed."
+  [socket]
+  (require-posix-nonblocking-runtime! :finish-connect)
+  (let [resolved (:jolt.net/connect-address socket)]
+    (when-not (resolved-address? resolved)
+      (throw (err/invalid-ex
+               :finish-connect
+               "socket was not created by try-connect"
+               {:jolt.net/value socket})))
+    (h/with-lease
+      socket
+      (fn [raw _]
+        (let [errorp (ffi/alloc 4)
+              ctx (connect-address-context resolved)]
+          (try
+            ;; Allocate the length cell only after errorp is protected by this
+            ;; finally. If the second native allocation itself fails, the first
+            ;; allocation must not leak.
+            (let [lenp (ffi/alloc 4)]
+              (try
+                (ffi/write errorp :int 0 0)
+                (ffi/write lenp :uint 0 4)
+                (err/checked
+                  :connect
+                  neg?
+                  #(nffi/invoke :getsockopt raw
+                                (t/const d :sol-socket)
+                                (t/const d :so-error)
+                                errorp lenp)
+                  ctx)
+                (let [code (ffi/read errorp :int 0)]
+                  (cond
+                    (zero? code) connected
+                    (connect-in-progress-code? code) in-progress
+                    :else (throw (err/native-ex :connect code ctx))))
+                (finally (ffi/free lenp))))
+            (finally (ffi/free errorp))))))))
 
 ;; --- lifecycle --------------------------------------------------------------
 (defn shutdown!

@@ -139,13 +139,13 @@ jobs:
         with:
           path: jolt-net
 
-      # The fork carries the three primitives jolt-net is built on. Submodules
+      # The fork carries the six primitives jolt-net is built on. Submodules
       # are required: the runtime will not load without vendor/irregex et al.
       - name: Checkout the jolt fork
         uses: actions/checkout@v4
         with:
           repository: casselc/jolt
-          ref: 358c42b796842db489a1fdb88b3696af27134a53
+          ref: ecf7728f15d8b8f858327c47dbd8b751eb36798c
           submodules: recursive
           path: jolt-upstream
 

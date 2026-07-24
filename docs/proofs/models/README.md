@@ -18,8 +18,10 @@ done
 ```
 
 Chiasmus removes those query commands before invoking its embedded solver. On
-2026-07-23 all 21 files passed the Chiasmus SMT-LIB linter with zero errors and
-were solver-checked with its local `z3-solver` 4.16.0 package.
+2026-07-24 all 27 files passed the Chiasmus SMT-LIB linter with zero errors and
+were solver-checked with its local `z3-solver` package. The host did not have a
+standalone `z3` executable; Chiasmus verification, rather than the shell example
+above, is the recorded solver run.
 
 ## Expected results
 
@@ -37,6 +39,9 @@ were solver-checked with its local `z3-solver` 4.16.0 package.
 | `readiness-generation-mismatch.smt2` | `unsat` | generation mismatch conflicts with complete-token dispatch |
 | `readiness-revision-mismatch.smt2` | `unsat` | revision mismatch conflicts with complete-token dispatch |
 | `readiness-current-token-nonvacuity.smt2` | `sat` | fd `8`, generation `10`, revision `3`, dispatch allowed |
+| `nonblocking-transition-buggy.smt2` | `sat` | fixed declaration, successful return, absent bit, marked handle, blocking-capable admission |
+| `nonblocking-transition-corrected.smt2` | `unsat` | explicit ABI boundary plus observed-bit mark postcondition exclude both violation branches |
+| `nonblocking-transition-nonvacuity.smt2` | `sat` | observed bit permits a marked handle and useful short operation |
 | `accept-terminal-close-buggy.smt2` | `sat` | pre-entry wake consumed; poller remains open; accept remains blocked after listener close |
 | `accept-terminal-close-corrected.smt2` | `unsat` | active await exits, late await is rejected, and no callback/native-close wait cycle exists |
 | `accept-terminal-close-nonvacuity.smt2` | `sat` | removal callback first; active await exits; listener close succeeds |
@@ -46,6 +51,9 @@ were solver-checked with its local `z3-solver` 4.16.0 package.
 | `wake-epoch-buggy.smt2` | `sat` | drain/producer/reset/park steps `0/1/2/3`; no byte remains |
 | `wake-epoch-corrected.smt2` | `unsat` | entry-epoch restore guarantees a byte for a new epoch |
 | `wake-epoch-nonvacuity.smt2` | `sat` | coalesced producer; drain restores byte; await progresses |
+| `connect-ownership-completion-buggy.smt2` | `sat` | `in_progress` returned with zero owners; native close step 2 precedes `getsockopt` step 3; completion takes close ownership |
+| `connect-ownership-completion-corrected.smt2` | `unsat` | returned ownership, rollback, completion preservation, and lease-drain facts exclude all four violation branches |
+| `connect-ownership-completion-nonvacuity.smt2` | `sat` | in-progress/refusal close race orders events `0/1/2/3/4` and retains one owner |
 
 The full unsat cores observed in that run were:
 
@@ -68,6 +76,12 @@ generation mismatch:
 revision mismatch:
   revision_mismatch_iff_tokens_differ dispatch_iff_current_complete_token
   violation_iff_mismatch_is_dispatched property_violated
+
+nonblocking transition corrected:
+  binding_declares_varargs_after_two
+  mark_iff_success_and_observed_postcondition
+  short_operation_requires_marked_handle declaration_violation_definition
+  lease_violation_definition violation_definition property_violated
 
 accept terminal close corrected:
   listener_close_owns_the_transition accept_installs_terminal_callback
@@ -92,6 +106,19 @@ wake epoch corrected:
   entry_restore_iff_epoch_advanced byte_iff_written_or_restored
   new_epoch_iff_wake_after_entry violation_iff_new_epoch_has_no_byte
   property_violated
+
+connect ownership/completion corrected:
+  return_iff_immediate_or_in_progress
+  rollback_closes_every_unreturned_failure
+  ownership_transfers_for_every_returned_status
+  finish_runs_iff_completion_selected
+  completion_only_for_in_progress_in_this_bound
+  finish_never_closes_or_transfers finish_preserves_owner_count
+  lease_admission_rejects_after_close getsockopt_requires_admitted_lease
+  getsockopt_inside_short_lease native_close_waits_for_completion_release
+  returned_owner_violation_definition rollback_violation_definition
+  post_close_completion_violation_definition
+  completion_owner_violation_definition violation_definition violation_query
 ```
 
 ## Source and runtime oracles
@@ -104,6 +131,12 @@ interleaving tests supply the semantic oracle:
 - `jolt.net.poller/await-ready` compares the complete captured registration
   token with the current token after native poll, corresponding to the
   generation and revision models.
+- `jolt.net.ffi/p-fcntl` declares `{:varargs-after 2}`, and
+  `jolt.net.nonblocking/set-raw!` reads `F_GETFL` back before any handle is
+  marked. `test/jolt/net/poller_test.clj` independently observes the bit on a
+  returned listener and injects the buggy control where `F_SETFL` appears to
+  succeed but read-back still lacks the bit. These are the source and runtime
+  oracles for the non-blocking-transition models.
 - `jolt.net/accept` installs a terminal listener before poller registration;
   `jolt.net.poller/close!` retires admission and waits for an active await to
   exit. `jolt.net.handle/release!` can release the await's listener lease while
@@ -114,15 +147,22 @@ interleaving tests supply the semantic oracle:
   release, drain, and write-first/read-last transitions.
 - `signal-wake!`, `drain-wake-pipe!`, and the await-entry epoch comparison
   correspond to the wake-epoch models.
+- `jolt.net/try-connect-address` transfers both successful initiation statuses
+  through `h/own`, while its pre-transfer catch uses `h/raw-close!`.
+  `jolt.net/finish-connect!` reads `SO_ERROR` inside `h/with-lease` and contains
+  no close path; these are the source oracles for the connect models.
 - `test/jolt/net/socket_test.clj` waits for both accept close paths, then bounds
   listener close and accept completion while callbacks on both sides of the
   internal listeners prove reentrant map mutation does not skip callbacks.
-- `test/jolt/net/poller_test.clj` exercises lease drain, stale token filtering,
-  forced write-vs-close retirement, and the enter/drain/reset wake race against
-  the real implementation.
+- `test/jolt/net/poller_test.clj` exercises connect classification, real
+  `SO_ERROR` success/refusal, ownership after failure, rollback leak detection,
+  absolute-deadline composition, lease drain, stale token filtering, forced
+  write-vs-close retirement, and the enter/drain/reset wake race against the
+  real implementation.
 
-The models omit scheduler fairness, weak-memory behavior beneath Clojure atom
-linearizability, kernel bugs, numeric descriptor allocation policy, and the
+The models omit scheduler fairness, native ABI implementation, weak-memory
+behavior beneath Clojure atom linearizability, kernel bugs, numeric descriptor
+allocation policy, and the
 unbounded number of producers or registrations. The implementation therefore
 still needs the runtime race tests and platform CI; these models do not replace
 them.

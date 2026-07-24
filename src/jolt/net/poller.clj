@@ -10,6 +10,7 @@
             [jolt.net.error :as err]
             [jolt.net.ffi :as nffi]
             [jolt.net.handle :as h]
+            [jolt.net.nonblocking :as nb]
             [jolt.net.target :as t]))
 
 (def ^:private d nffi/descriptor)
@@ -28,14 +29,6 @@
 (defn- require-posix! [op]
   (when-not (contains? #{:linux :darwin} (:os (jolt.host/target)))
     (unsupported! op)))
-
-(defn- set-nonblocking-raw! [raw]
-  (let [flags (err/checked :fcntl-getfl neg?
-                           #(nffi/invoke :fcntl raw (t/const d :f-getfl) 0))]
-    (err/checked :fcntl-setfl neg?
-                 #(nffi/invoke :fcntl raw (t/const d :f-setfl)
-                               (bit-or flags (t/const d :o-nonblock)))))
-  raw)
 
 (defn- take-mutations! [poller]
   (let [q (:mutations poller)]
@@ -340,8 +333,8 @@
       (let [read-raw (ffi/read fds :int 0)
             write-raw (ffi/read fds :int 4)]
         (try
-          (set-nonblocking-raw! read-raw)
-          (set-nonblocking-raw! write-raw)
+          (nb/set-raw! read-raw)
+          (nb/set-raw! write-raw)
           (let [read-h (h/own read-raw :poller-wake-read {})
                 write-h (h/own write-raw :poller-wake-write {})
                 poller

@@ -27,10 +27,12 @@
 (def would-block ::would-block)
 (def eof ::eof)
 (def in-progress ::in-progress)
+(def connected ::connected)
 
 (defn would-block? [x] (= x ::would-block))
 (defn eof? [x] (= x ::eof))
 (defn in-progress? [x] (= x ::in-progress))
+(defn connected? [x] (= x ::connected))
 
 ;; --- capture ----------------------------------------------------------------
 (defn capture

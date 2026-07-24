@@ -29,15 +29,42 @@ name is under `jolt.net`, and there are no runtime dependencies.
 
 Early. The implemented slices are **endpoints, resolution, owned sockets, numeric
 address inspection, the error contract, POSIX non-blocking byte I/O, and a POSIX
-`poll(2)` readiness poller with a self-pipe waker.** Non-blocking connect
-completion, TLS, and byte-stream protocols remain out of scope. See
+`poll(2)` readiness poller with a self-pipe waker, including non-blocking
+connect initiation and `SO_ERROR` completion.** TLS and byte-stream protocols
+remain out of scope. See
 `docs/PLATFORM-COVERAGE.md` for exactly what is verified on which platform —
 including what is *not*.
 
+## Non-blocking connect
+
+The substrate keeps connection policy above native socket ownership:
+
+```clojure
+(let [attempt (net/try-connect (net/endpoint "127.0.0.1" 7888))
+      socket  (:jolt.net/socket attempt)]
+  (if (= net/in-progress (:jolt.net/status attempt))
+    (do
+      (net/register! poller socket #{:write})
+      ;; await against one caller-owned absolute monotonic deadline
+      (net/await-ready poller remaining-timeout-ms)
+      ;; writable/error/hangup readiness is not success; SO_ERROR decides
+      (net/finish-connect! socket))
+    net/connected))
+```
+
+`try-connect` also accepts a resolved address or an ordered sequence returned by
+`resolve`. It skips synchronous native failures in resolver order and returns
+the selected address plus `:jolt.net/remaining-addresses`, so a connector can
+close a failed asynchronous attempt and advance without resolving again.
+Ownership transfers with both `net/connected` and `net/in-progress`; neither
+`finish-connect!` success nor failure closes the socket.
+
 ## Requirements
 
-**jolt-net does not build on released `joltc` v0.4.15.** It depends on five
-primitives added in the local fork:
+**jolt-net does not build on released `joltc` v0.4.15.** It currently pins the
+reviewed `casselc/jolt` proposal fork at
+`ecf7728f15d8b8f858327c47dbd8b751eb36798c` and depends on six primitives added
+there:
 
 - `(jolt.host/target)` — the target descriptor, for fail-closed platform tables;
 - `jolt.host/monotonic-nanos` — a real monotonic source for deadlines;
@@ -45,6 +72,9 @@ primitives added in the local fork:
 - `:int16` / `:uint16` foreign types — `sockaddr` fields are 16-bit;
 - `jolt.ffi/with-byte-array-pointer` — a scoped, pinned pointer to any validated
   array slice, so partial reads and writes do not allocate or copy.
+- `{:varargs-after n}` on `jolt.ffi/defcfn` — preserves the C variadic ABI
+  boundary even with a fully typed Jolt signature; required for `fcntl` on
+  Apple arm64.
 
 Run everything through `bin/jnc`, which pins the fork and fails with a readable
 message rather than an unbound-var error:
@@ -76,6 +106,15 @@ decisions:
   update, and remove return only after the mutation is applied. Every poll
   snapshot carries the socket ownership generation and registration revision, so
   events from descriptor reuse or an invalidated snapshot are dropped.
+- **Connect readiness is not connect success.** Initiation returns an owned
+  non-blocking socket plus an exact status. After write/error/hangup readiness,
+  completion reads `SO_ERROR` under a short handle lease and preserves the real
+  pending native code. Resolver ordering and deadline/cancellation policy remain
+  in the connector layer.
+- **Non-blocking is a verified postcondition.** `fcntl` declares its two fixed
+  arguments before `...`, and every transition reads `F_GETFL` back before the
+  handle is marked. An ABI mismatch fails closed instead of turning a short
+  handle lease into an uninterruptible syscall.
 - **Poller close is a completion boundary.** Wake writes and close share an
   owner-independent CAS admission gate. The winning close retires and drains
   writers, closes pipe-write before pipe-read, wakes/joins the single await, and
