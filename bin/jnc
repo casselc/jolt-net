@@ -1,0 +1,34 @@
+#!/bin/sh
+# jnc — run jolt-net against the local jolt fork.
+#
+# jolt-net cannot be built by the released joltc: it needs (jolt.host/target),
+# jolt.ffi/errno, and the 16-bit foreign types, none of which exist in v0.4.15.
+# A bare `joltc` on PATH would fail with an unbound-var error far from the cause,
+# so this wrapper pins the fork and says so plainly if it is missing.
+#
+#   bin/jnc -M:test              run the test suite
+#   bin/jnc -A:test -m hegel.install   one-time: fetch libhegel
+#   bin/jnc repl                 a REPL with the project on the source roots
+#
+# Override the fork location with JOLT_UPSTREAM.
+set -eu
+
+JOLT_UPSTREAM="${JOLT_UPSTREAM:-/home/chuck/ai-src/worktrees/jolt-upstream-6-8}"
+JOLTC="$JOLT_UPSTREAM/bin/joltc"
+
+if [ ! -x "$JOLTC" ]; then
+    echo "jnc: no joltc at $JOLTC" >&2
+    echo "jnc: jolt-net requires the local jolt fork (jolt.host/target," >&2
+    echo "     jolt.ffi/errno, 16-bit FFI types). Set JOLT_UPSTREAM to the" >&2
+    echo "     fork checkout. See docs/UPSTREAM-NOTES.md." >&2
+    exit 1
+fi
+
+# JOLT_PWD is how joltc finds THIS project's deps.edn: bin/joltc cd's to the jolt
+# repo root so the runtime's relative loads work, and reads the project dir here.
+export JOLT_PWD="${JOLT_PWD:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"
+# The AOT cache key can collide and silently run stale code across edits.
+export JOLT_AOT_CACHE="${JOLT_AOT_CACHE:-0}"
+export CHEZ="${CHEZ:-scheme}"
+
+exec "$JOLTC" "$@"
