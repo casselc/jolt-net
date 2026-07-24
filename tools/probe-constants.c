@@ -11,7 +11,14 @@
  * Build/run through tools/probe-constants.sh.
  */
 #ifndef _WIN32
-#  define _POSIX_C_SOURCE 200112L
+#  ifdef __APPLE__
+     /* Defining only _POSIX_C_SOURCE hides the Darwin socket extensions this
+        probe must verify, including SO_NOSIGPIPE, MSG_NOSIGNAL, and
+        EAI_ADDRFAMILY.  Ask Apple's headers for their full public surface. */
+#    define _DARWIN_C_SOURCE
+#  else
+#    define _POSIX_C_SOURCE 200112L
+#  endif
 #endif
 
 #include <stdio.h>
