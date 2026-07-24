@@ -6,7 +6,9 @@
   starts sockets or futures can leave non-daemon threads alive, which would hang
   the process after the last test printed PASS."
   (:require [jolt.net.check :as c]
-            [jolt.net.target-test :as target-test]))
+            [jolt.net.target-test :as target-test]
+            [jolt.net.socket-test :as socket-test]
+            [jolt.net.resolver-test :as resolver-test]))
 
 (defn -main [& _]
   (println "jolt-net test suite")
@@ -32,6 +34,8 @@
                 #(= 2 %) (jolt.ffi/sizeof :uint16))
 
   (target-test/run!)
+  (resolver-test/run!)
+  (socket-test/run!)
 
   (flush)
   (System/exit (c/summary)))
