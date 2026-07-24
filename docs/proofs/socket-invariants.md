@@ -184,6 +184,45 @@ where drain captured the newer epoch.
 - `wake-epoch-nonvacuity.smt2` is **sat** for the hard case where the producer
   really coalesces, drain restores the byte, and await progresses.
 
+**Accept-terminal invariant.** A registration-removal wake is intentionally a
+best-effort state-change notification, not a cancellation boundary. Listener
+close can race just before accept enters `await-ready`: the already-published
+wake is then a pre-entry epoch, may be drained before the native snapshot, and
+cannot guarantee prompt accept completion. The macOS source-built Chez gate
+exposed this schedule as a blocking accept that outlived listener close.
+
+`accept` therefore owns a second close listener whose only job is terminal:
+it calls `poller/close!`. The listener installs this callback before poller
+registration, so a close anywhere in setup either rejects registration or
+retires the poller. If await is already active, terminal poller close retires
+wake admission, closes the independent wake-pipe write end, and waits for await
+to exit. If await enters later, the closed poller rejects it.
+
+The synchronous callback does not form a lease deadlock. Await may hold a short
+listener lease in its snapshot, but `handle/release!` does not wait for listener
+notification or native close. Its wait-for path is:
+poller write-close → native poll return → listener lease release → await exit →
+terminal callback return → listener notification/native close. The ordinary
+registration callback can run before or after the terminal callback; both
+orders use the same independent terminal path.
+
+- `accept-terminal-close-buggy.smt2` is **sat**: a best-effort wake occurs
+  before await entry, is no longer visible after entry, and the still-open
+  poller admits an accept that remains blocked after listener close.
+- `accept-terminal-close-corrected.smt2` makes both violation branches
+  **unsat**. An active await cannot survive terminal callback return, a later
+  await cannot enter the retired poller, and the await does not depend on
+  listener native close, so the three-edge callback cycle cannot form.
+- `accept-terminal-close-nonvacuity.smt2` is **sat** with the ordinary removal
+  callback first and an active await crossing terminal close. The await exits,
+  the poller becomes terminal, and listener close completes.
+
+The runtime counterpart waits until accept has installed both close listeners
+instead of sleeping for a guessed scheduler interval. It bounds listener close
+and accept completion independently, and places callbacks before and after the
+accept-owned listeners to verify their reentrant removal does not skip a
+neighboring callback.
+
 ---
 
 ## What is deliberately not modelled

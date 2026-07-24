@@ -15,6 +15,17 @@
       (net/close! l) true)
     (catch :default _ false)))
 
+(defn- wait-for-close-listeners!
+  "Wait until accept has installed both its terminal poller listener and the
+  poller's ordinary registration listener.  This makes the close/accept test an
+  actual blocked-accept race instead of relying on a scheduler-sensitive sleep."
+  [listener minimum]
+  (loop [remaining 1000]
+    (cond
+      (<= minimum (count (:listeners @(:jolt.net/state listener)))) true
+      (zero? remaining) false
+      :else (do (Thread/sleep 1) (recur (dec remaining))))))
+
 (defn- round-trip
   "listen -> connect -> accept on `host`, asserting the two sides agree about
   who is who. This is the property that jolt-tcp could not express at all: it
@@ -127,15 +138,29 @@
   ;; that close can recycle.
   (when (contains? #{:linux :darwin} (:os (jolt.host/target)))
     (let [l (net/listen (net/endpoint "127.0.0.1" 0))
+          before (atom 0)
+          after (atom 0)
+          _ (h/on-close! l #(swap! before inc))
           waiting (future
                     (try
                       (net/accept l)
                       :unexpected-accept
                       (catch :default e (:jolt.net/kind (ex-data e)))))]
-      (Thread/sleep 20)
-      (net/close! l)
-      (c/check "listener close releases blocking accept without descriptor reuse"
-               :invalid (deref waiting 500 ::timed-out))))
+      (try
+        (c/check "blocking accept installs both close paths before the race"
+                 true (wait-for-close-listeners! l 3))
+        ;; This listener is deliberately installed after accept's two listeners.
+        ;; Poller close mutates the listener map reentrantly, but handle close
+        ;; must continue over its captured callback snapshot in either order.
+        (h/on-close! l #(swap! after inc))
+        (let [closing (future (net/close! l))]
+          (c/check "listener close is a bounded completion boundary for accept"
+                   true (deref closing 2500 ::timed-out))
+          (c/check "listener close releases blocking accept without descriptor reuse"
+                   :invalid (deref waiting 500 ::timed-out))
+          (c/check "terminal poller close does not skip neighboring callbacks"
+                   [1 1] [@before @after]))
+        (finally (net/close! l)))))
 
   (c/section "sockets: rollback does not leak descriptors")
   ;; Every failed listen allocates a socket and must close it on the way out. If

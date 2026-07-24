@@ -222,15 +222,28 @@
   [listener]
   (if-not (poller-runtime?)
     (native-blocking-accept listener)
-    (let [p (poller/open)]
+    (let [p (poller/open)
+          terminal-listener (atom nil)]
       (try
+        ;; Registration already gives the poller a best-effort mutation wake,
+        ;; but listener close can publish that wake just before accept enters
+        ;; await-ready; it is then a pre-entry epoch and not a cancellation
+        ;; boundary. Close the accept-owned poller instead. An active await must
+        ;; exit before this callback returns, while a later await is rejected by
+        ;; terminal lifecycle. Darwin CI exposed the pre-entry race.
+        (when-not (reset! terminal-listener
+                          (h/on-close! listener #(poller/close! p)))
+          (throw (err/invalid-ex :accept "listener is closed" nil)))
         (poller/register! p listener #{:read})
         (loop []
           (let [accepted (try-accept listener)]
             (if (= would-block accepted)
               (do (poller/await-ready p 1000) (recur))
               accepted)))
-        (finally (poller/close! p))))))
+        (finally
+          (when-let [id @terminal-listener]
+            (h/remove-close-listener! listener id))
+          (poller/close! p))))))
 
 (defn set-nonblocking!
   "Put a socket into non-blocking mode. This slice supports POSIX fcntl targets;

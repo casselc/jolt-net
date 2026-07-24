@@ -18,7 +18,7 @@ done
 ```
 
 Chiasmus removes those query commands before invoking its embedded solver. On
-2026-07-23 all 18 files passed the Chiasmus SMT-LIB linter with zero errors and
+2026-07-23 all 21 files passed the Chiasmus SMT-LIB linter with zero errors and
 were solver-checked with its local `z3-solver` 4.16.0 package.
 
 ## Expected results
@@ -37,6 +37,9 @@ were solver-checked with its local `z3-solver` 4.16.0 package.
 | `readiness-generation-mismatch.smt2` | `unsat` | generation mismatch conflicts with complete-token dispatch |
 | `readiness-revision-mismatch.smt2` | `unsat` | revision mismatch conflicts with complete-token dispatch |
 | `readiness-current-token-nonvacuity.smt2` | `sat` | fd `8`, generation `10`, revision `3`, dispatch allowed |
+| `accept-terminal-close-buggy.smt2` | `sat` | pre-entry wake consumed; poller remains open; accept remains blocked after listener close |
+| `accept-terminal-close-corrected.smt2` | `unsat` | active await exits, late await is rejected, and no callback/native-close wait cycle exists |
+| `accept-terminal-close-nonvacuity.smt2` | `sat` | removal callback first; active await exits; listener close succeeds |
 | `wake-pair-buggy.smt2` | `sat` | admit/read-close/write/release steps `0/2/3/4` |
 | `wake-pair-corrected.smt2` | `unsat` | CAS gate, lease-before-count release, drain, write-first/read-last |
 | `wake-pair-nonvacuity.smt2` | `sat` | writer crosses retirement, drains, and both ends close |
@@ -66,6 +69,18 @@ revision mismatch:
   revision_mismatch_iff_tokens_differ dispatch_iff_current_complete_token
   violation_iff_mismatch_is_dispatched property_violated
 
+accept terminal close corrected:
+  listener_close_owns_the_transition accept_installs_terminal_callback
+  listener_close_invokes_captured_terminal_callback
+  active_await_exits_before_poller_close_returns
+  terminal_callback_retires_poller_lifecycle
+  late_admission_iff_attempt_on_open_poller
+  active_survival_iff_terminal_return_did_not_release_await
+  poller_wake_close_is_independent_of_listener_native_close
+  callback_cycle_iff_all_three_wait_edges_exist
+  blocked_iff_active_wait_survives_or_late_wait_is_admitted
+  violation_iff_blocked_after_return_or_callback_cycle property_violated
+
 wake pair corrected:
   one_cas_admission_gate late_writer_iff_admitted_after_retirement
   handle_lease_released_before_writer_count
@@ -89,11 +104,19 @@ interleaving tests supply the semantic oracle:
 - `jolt.net.poller/await-ready` compares the complete captured registration
   token with the current token after native poll, corresponding to the
   generation and revision models.
+- `jolt.net/accept` installs a terminal listener before poller registration;
+  `jolt.net.poller/close!` retires admission and waits for an active await to
+  exit. `jolt.net.handle/release!` can release the await's listener lease while
+  listener notification is still in progress. These are the source oracles for
+  the accept-terminal-close models.
 - `jolt.net.poller/acquire-wake-write!`, `release-wake-write!`,
   `retire-wake-writes!`, and `finish-close!` correspond to the wake-pair gate,
   release, drain, and write-first/read-last transitions.
 - `signal-wake!`, `drain-wake-pipe!`, and the await-entry epoch comparison
   correspond to the wake-epoch models.
+- `test/jolt/net/socket_test.clj` waits for both accept close paths, then bounds
+  listener close and accept completion while callbacks on both sides of the
+  internal listeners prove reentrant map mutation does not skip callbacks.
 - `test/jolt/net/poller_test.clj` exercises lease drain, stale token filtering,
   forced write-vs-close retirement, and the enter/drain/reset wake race against
   the real implementation.
