@@ -1,0 +1,196 @@
+# jolt-net CI.
+#
+# Two independent jobs, because they prove different things and have very
+# different prerequisites:
+#
+#   probe — compiles tools/probe-constants.c against each platform's OWN headers
+#           and runs it. Needs only a C compiler, so it covers all three
+#           platforms. This is what turns the per-target socket tables from
+#           remembered numbers into checked ones, and it is the only way the
+#           macOS column becomes real.
+#
+#   test  — the full suite. Needs the forked joltc (jolt.host/target,
+#           jolt.ffi/errno, 16-bit FFI types), which means checking out
+#           casselc/jolt and a working Chez Scheme.
+#
+# Windows is deliberately probe-only for now: there is no packaged Chez Scheme
+# for Windows runners, so the full suite cannot run there yet. That is stated
+# here rather than hidden, and docs/PLATFORM-COVERAGE.md says the same.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: probe ABI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile and run the ABI probe
+        shell: bash
+        run: |
+          set -eu
+          cc=""
+          for c in cc gcc clang; do
+            if command -v "$c" >/dev/null 2>&1; then cc="$c"; break; fi
+          done
+          [ -n "$cc" ] || { echo "no C compiler found"; exit 1; }
+          echo "using $cc"
+          mkdir -p tools/probed
+          "$cc" -O0 -o probe tools/probe-constants.c
+          # Strip CR so Windows output is comparable to the others.
+          ./probe | tr -d '\r' > probe.edn
+          cat probe.edn
+          os=$(sed -n 's/^{:os :\([a-z0-9-]*\).*/\1/p' probe.edn)
+          arch=$(sed -n 's/^ :arch :\([a-z0-9-]*\).*/\1/p' probe.edn)
+          cp probe.edn "tools/probed/$os-$arch.edn"
+          echo "PROBE_FILE=tools/probed/$os-$arch.edn" >> "$GITHUB_ENV"
+
+      - name: Upload probed ABI facts
+        uses: actions/upload-artifact@v4
+        with:
+          name: probed-${{ matrix.os }}
+          path: tools/probed/*.edn
+
+  # Fail if any committed descriptor disagrees with what that platform's headers
+  # actually say. A drift here is not cosmetic -- a wrong struct offset is memory
+  # corruption -- so this gates rather than warns.
+  tables:
+    name: tables match probed headers
+    needs: probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: probed-artifacts
+      - name: Compare committed facts against every freshly probed platform
+        shell: bash
+        run: |
+          set -eu
+          echo "== freshly probed on the runners =="
+          find probed-artifacts -name '*.edn' | sort
+          echo
+          drift=0
+          new=0
+          # Compare against what is COMMITTED (tools/probed in the checkout).
+          # Do not copy over it first, or there would be nothing left to compare.
+          for f in $(find probed-artifacts -name '*.edn' | sort); do
+            base=$(basename "$f")
+            committed="tools/probed/$base"
+            if [ ! -f "$committed" ]; then
+              echo "NEW: $base has no committed counterpart yet"
+              echo "     (expected the first time a platform joins CI)"
+              sed 's/^/       /' "$f"
+              new=1
+              continue
+            fi
+            if diff -u "$committed" "$f" > "/tmp/$base.diff"; then
+              echo "OK:  $base matches the committed facts"
+            else
+              echo "DRIFT: $base disagrees with this platform's real headers"
+              sed 's/^/       /' "/tmp/$base.diff"
+              drift=1
+            fi
+          done
+          echo
+          if [ "$new" = 1 ]; then
+            echo "A platform reported facts we have not committed. Download the"
+            echo "artifact, commit it under tools/probed/, and update the matching"
+            echo "descriptor in src/jolt/net/target.clj."
+          fi
+          # Drift is a hard failure: a wrong struct offset is memory corruption,
+          # not a formatting nit. A merely-new platform is not.
+          exit $drift
+
+  test:
+    name: suite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # No packaged Chez Scheme for Windows runners; see the header comment.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout jolt-net
+        uses: actions/checkout@v4
+        with:
+          path: jolt-net
+
+      # The fork carries the three primitives jolt-net is built on. Submodules
+      # are required: the runtime will not load without vendor/irregex et al.
+      - name: Checkout the jolt fork
+        uses: actions/checkout@v4
+        with:
+          repository: casselc/jolt
+          ref: codex/upstream-improvements-6-8
+          submodules: recursive
+          path: jolt-upstream
+
+      - name: Install Chez Scheme (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y chezscheme
+
+      - name: Install Chez Scheme (macOS)
+        if: runner.os == 'macOS'
+        run: brew install chezscheme
+
+      # bin/joltc searches for `chez` then `chezscheme` -- not `scheme`, which is
+      # what the Debian package installs. Provide whichever name is missing.
+      - name: Normalize the Chez binary name
+        shell: bash
+        run: |
+          set -eu
+          mkdir -p "$HOME/bin"
+          found=""
+          for c in chez chezscheme scheme; do
+            if command -v "$c" >/dev/null 2>&1; then found=$(command -v "$c"); break; fi
+          done
+          [ -n "$found" ] || { echo "no Chez Scheme on PATH"; exit 1; }
+          echo "found Chez at $found"
+          ln -sf "$found" "$HOME/bin/chez"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          "$found" --version 2>&1 | head -1 || true
+
+      - name: Install jolt-hegel (property-test engine)
+        working-directory: jolt-net
+        env:
+          JOLT_UPSTREAM: ${{ github.workspace }}/jolt-upstream
+        run: ./bin/jnc -A:test -m hegel.install
+
+      - name: Refresh this platform's probed ABI facts
+        working-directory: jolt-net
+        shell: bash
+        run: ./tools/probe-constants.sh native
+
+      - name: Run the suite
+        working-directory: jolt-net
+        env:
+          JOLT_UPSTREAM: ${{ github.workspace }}/jolt-upstream
+        run: ./bin/jnc -M:test
+
+      # If the freshly probed facts differ from what is committed, surface the
+      # diff -- on macOS this is expected on the first run, because that table
+      # was written from documentation rather than from a machine.
+      - name: Show any drift in the committed tables
+        if: always()
+        working-directory: jolt-net
+        shell: bash
+        run: git diff --stat tools/probed/ && git diff tools/probed/ || true
+
+      - name: Upload this platform's probed facts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probed-suite-${{ matrix.os }}
+          path: jolt-net/tools/probed/*.edn
