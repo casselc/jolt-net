@@ -95,7 +95,12 @@ jobs:
               new=1
               continue
             fi
-            if diff -u "$committed" "$f" > "/tmp/$base.diff"; then
+            # Compare with line endings normalized: a Windows runner checks the
+            # committed files out as CRLF, which would otherwise show up as
+            # every line differing from itself.
+            tr -d '\r' < "$committed" > /tmp/a.edn
+            tr -d '\r' < "$f" > /tmp/b.edn
+            if diff -u /tmp/a.edn /tmp/b.edn > "/tmp/$base.diff"; then
               echo "OK:  $base matches the committed facts"
             else
               echo "DRIFT: $base disagrees with this platform's real headers"
@@ -137,9 +142,11 @@ jobs:
           submodules: recursive
           path: jolt-upstream
 
-      - name: Install Chez Scheme (Linux)
+      # libssl/libcrypto back jolt.mvn-http's HTTPS client, which is what
+      # hegel.install uses to fetch libhegel. macOS gets these from brew already.
+      - name: Install Chez Scheme and OpenSSL (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y chezscheme
+        run: sudo apt-get update && sudo apt-get install -y chezscheme libssl-dev
 
       - name: Install Chez Scheme (macOS)
         if: runner.os == 'macOS'
@@ -177,7 +184,11 @@ jobs:
           set -eu
           echo '(begin (display (scheme-version)) (newline) (exit))' | chez -q
 
+      # Best-effort: libhegel is a downloaded native library, and a release-asset
+      # fetch is not a reason to lose the socket coverage. The suite degrades to
+      # SKIP for the generative properties if it is unavailable.
       - name: Install jolt-hegel (property-test engine)
+        continue-on-error: true
         working-directory: jolt-net
         env:
           JOLT_UPSTREAM: ${{ github.workspace }}/jolt-upstream

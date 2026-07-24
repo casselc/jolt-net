@@ -1,0 +1,6 @@
+# Probe output is compared byte-for-byte across platforms in CI, so a Windows
+# checkout must not rewrite it to CRLF and manufacture a spurious diff.
+*.edn text eol=lf
+*.clj text eol=lf
+*.sh  text eol=lf
+*.c   text eol=lf

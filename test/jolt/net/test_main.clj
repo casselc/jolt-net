@@ -10,7 +10,6 @@
             [jolt.net.socket-test :as socket-test]
             [jolt.net.resolver-test :as resolver-test]
             [jolt.net.address-test :as address-test]
-            [jolt.net.address-property-test]
             [clojure.test :as ct]))
 
 (defn -main [& _]
@@ -44,14 +43,21 @@
   ;; Generative properties run under clojure.test (hegel's integration reports
   ;; through it), so fold its counters into the same exit code.
   (c/section "generative properties (jolt-hegel)")
-  (let [r (ct/run-tests 'jolt.net.address-property-test)]
+  ;; Loaded at RUNTIME, not in the ns form: the generative engine is a
+  ;; downloaded native library, and its absence must cost us the properties
+  ;; only -- not the socket coverage, which is the more important half.
+  (if-not (try (require 'jolt.net.address-property-test) true
+               (catch :default _ false))
+    (c/skip "hegel generative properties"
+            "libhegel unavailable here; the property engine could not be loaded")
+    (let [r (ct/run-tests 'jolt.net.address-property-test)]
     (c/check "hegel address properties report no failures" 0 (+ (:fail r) (:error r)))
     ;; A suite that ran ZERO properties also reports zero failures. Assert the
     ;; properties actually executed, or a require that silently stopped loading
     ;; would read as success.
     (c/check-pred "hegel properties actually ran" pos? (:test r))
     (c/check-pred "hegel properties made assertions" pos? (:pass r))
-    (println (str "     " (:test r) " properties, " (:pass r) " assertions passed")))
+      (println (str "     " (:test r) " properties, " (:pass r) " assertions passed"))))
 
   (flush)
   (System/exit (c/summary)))
