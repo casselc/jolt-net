@@ -7,6 +7,8 @@
 ; The core is the useful part -- it shows the property follows from the capture
 ; ordering alone, and does not depend on the cleanup's code at all.
 
+(set-option :produce-unsat-cores true)
+
 (declare-const fail_code Int)
 (declare-const cleanup_code Int)
 (declare-const errno_after_fail Int)
@@ -25,3 +27,6 @@
 
 ; negation of the property
 (assert (! (not (= reported fail_code)) :named property_violated))
+
+(check-sat)
+(get-unsat-core)

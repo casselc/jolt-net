@@ -9,6 +9,8 @@
 ; reported=1 -- a real clobber occurred and the failure's code was still
 ; reported.
 
+(set-option :produce-unsat-cores true)
+
 (declare-const fail_code Int)
 (declare-const cleanup_code Int)
 (declare-const errno_after_fail Int)
@@ -26,3 +28,6 @@
 (assert (! (= reported fail_code) :named property_holds))
 ; and the clobber must be real, not hypothetical
 (assert (! (distinct errno_after_cleanup errno_after_fail) :named clobber_is_real))
+
+(check-sat)
+(get-model)

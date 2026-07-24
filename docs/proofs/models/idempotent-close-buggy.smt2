@@ -10,6 +10,8 @@
 ;
 ; VERIFIED: sat. Counterexample: both threads observe :open, close_count=2.
 
+(set-option :produce-unsat-cores true)
+
 (declare-const t1_saw_open Bool)
 (declare-const t2_saw_open Bool)
 (declare-const t1_closes Bool)
@@ -27,3 +29,6 @@
 
 ; negation of "close is issued exactly once"
 (assert (! (not (= close_count 1)) :named property_violated))
+
+(check-sat)
+(get-model)

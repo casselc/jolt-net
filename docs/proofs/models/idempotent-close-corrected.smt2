@@ -6,6 +6,8 @@
 ;
 ; VERIFIED: unsat. unsat core: cas_atomicity, someone_closes, property_violated.
 
+(set-option :produce-unsat-cores true)
+
 (declare-const t1_cas_wins Bool)
 (declare-const t2_cas_wins Bool)
 (declare-const close_count Int)
@@ -19,3 +21,6 @@
 
 ; negation of "close is issued exactly once"
 (assert (! (not (= close_count 1)) :named property_violated))
+
+(check-sat)
+(get-unsat-core)

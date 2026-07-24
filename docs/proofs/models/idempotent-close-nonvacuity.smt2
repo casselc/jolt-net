@@ -3,6 +3,8 @@
 ; UNSAT there would be worthless if atomicity and progress were jointly
 ; unsatisfiable: the property would hold because NO run exists, not because
 ; every run is safe.
+
+(set-option :produce-unsat-cores true)
 ;
 ; VERIFIED: sat. Witness: t1_cas_wins=true, t2_cas_wins=false, close_count=1,
 ; under genuine contention.
@@ -21,3 +23,6 @@
 
 ; the property ITSELF: a witness must exist
 (assert (! (= close_count 1) :named property_holds))
+
+(check-sat)
+(get-model)

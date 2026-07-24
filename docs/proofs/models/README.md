@@ -1,0 +1,105 @@
+# Socket invariant models
+
+These are bounded counterexample queries, not unbounded proofs of every operating
+system behavior. Each model records its finite domain and abstraction in
+comments. A `sat` result for a `-buggy` or `-control` model is an intentional
+witness; an `unsat` result means no violating execution exists inside that
+model. A separate `-nonvacuity` model demonstrates that each corrected design
+still permits useful work.
+
+Every `.smt2` file includes its own `(check-sat)` and either `(get-model)` or
+`(get-unsat-core)`, so a standalone Z3 can run it directly:
+
+```sh
+for model in docs/proofs/models/*.smt2; do
+  printf '%s: ' "$model"
+  z3 "$model"
+done
+```
+
+Chiasmus removes those query commands before invoking its embedded solver. On
+2026-07-23 all 18 files passed the Chiasmus SMT-LIB linter with zero errors and
+were solver-checked with its local `z3-solver` 4.16.0 package.
+
+## Expected results
+
+| Model | Expected | Essential witness or unsat core |
+|---|---:|---|
+| `errno-capture-ordering-buggy.smt2` | `sat` | failure `1`, cleanup `2`, reported `2` |
+| `errno-capture-ordering-corrected.smt2` | `unsat` | `failing_call_sets_errno`, `capture_before_cleanup`, `property_violated` |
+| `errno-capture-ordering-nonvacuity.smt2` | `sat` | failure `1`, cleanup `2`, reported `1` |
+| `idempotent-close-buggy.smt2` | `sat` | both callers win; `close_count = 2` |
+| `idempotent-close-corrected.smt2` | `unsat` | `cas_atomicity`, `someone_closes`, `property_violated` |
+| `idempotent-close-nonvacuity.smt2` | `sat` | contention with exactly one CAS winner |
+| `descriptor-reuse-buggy.smt2` | `sat` | steps `0/1/2/3`, fd `8`, generation `9 -> 10` |
+| `short-lease-post-close-corrected.smt2` | `unsat` | syscall inside lease, drain before close, post-close violation |
+| `blocking-lease-deadlock-control.smt2` | `sat` | syscall/close/release wait cycle; `deadlock = true` |
+| `readiness-generation-mismatch.smt2` | `unsat` | generation mismatch conflicts with complete-token dispatch |
+| `readiness-revision-mismatch.smt2` | `unsat` | revision mismatch conflicts with complete-token dispatch |
+| `readiness-current-token-nonvacuity.smt2` | `sat` | fd `8`, generation `10`, revision `3`, dispatch allowed |
+| `wake-pair-buggy.smt2` | `sat` | admit/read-close/write/release steps `0/2/3/4` |
+| `wake-pair-corrected.smt2` | `unsat` | CAS gate, lease-before-count release, drain, write-first/read-last |
+| `wake-pair-nonvacuity.smt2` | `sat` | writer crosses retirement, drains, and both ends close |
+| `wake-epoch-buggy.smt2` | `sat` | drain/producer/reset/park steps `0/1/2/3`; no byte remains |
+| `wake-epoch-corrected.smt2` | `unsat` | entry-epoch restore guarantees a byte for a new epoch |
+| `wake-epoch-nonvacuity.smt2` | `sat` | coalesced producer; drain restores byte; await progresses |
+
+The full unsat cores observed in that run were:
+
+```text
+errno corrected:
+  failing_call_sets_errno capture_before_cleanup property_violated
+
+idempotent close corrected:
+  cas_atomicity someone_closes property_violated
+
+short lease corrected:
+  syscall_requires_admitted_lease syscall_is_inside_short_lease
+  drain_before_native_close violation_iff_syscall_begins_after_native_close
+  property_violated
+
+generation mismatch:
+  generation_mismatch_iff_tokens_differ dispatch_iff_current_complete_token
+  violation_iff_mismatch_is_dispatched property_violated
+
+revision mismatch:
+  revision_mismatch_iff_tokens_differ dispatch_iff_current_complete_token
+  violation_iff_mismatch_is_dispatched property_violated
+
+wake pair corrected:
+  one_cas_admission_gate late_writer_iff_admitted_after_retirement
+  handle_lease_released_before_writer_count
+  admitted_writers_drain_before_write_close
+  write_end_closes_before_read_end active_writer_iff_handle_lease_not_released
+  violation_iff_late_admission_or_live_writer property_violated
+
+wake epoch corrected:
+  entry_restore_iff_epoch_advanced byte_iff_written_or_restored
+  new_epoch_iff_wake_after_entry violation_iff_new_epoch_has_no_byte
+  property_violated
+```
+
+## Source and runtime oracles
+
+The models deliberately stay small; the implementation and forced
+interleaving tests supply the semantic oracle:
+
+- `jolt.net.handle/acquire!`, `release!`, and `close!` implement the
+  open/admit, drain, and native-close transitions used by the lease models.
+- `jolt.net.poller/await-ready` compares the complete captured registration
+  token with the current token after native poll, corresponding to the
+  generation and revision models.
+- `jolt.net.poller/acquire-wake-write!`, `release-wake-write!`,
+  `retire-wake-writes!`, and `finish-close!` correspond to the wake-pair gate,
+  release, drain, and write-first/read-last transitions.
+- `signal-wake!`, `drain-wake-pipe!`, and the await-entry epoch comparison
+  correspond to the wake-epoch models.
+- `test/jolt/net/poller_test.clj` exercises lease drain, stale token filtering,
+  forced write-vs-close retirement, and the enter/drain/reset wake race against
+  the real implementation.
+
+The models omit scheduler fairness, weak-memory behavior beneath Clojure atom
+linearizability, kernel bugs, numeric descriptor allocation policy, and the
+unbounded number of producers or registrations. The implementation therefore
+still needs the runtime race tests and platform CI; these models do not replace
+them.

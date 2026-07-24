@@ -10,6 +10,8 @@
 ; VERIFIED: sat. Counterexample: fail_code=1, cleanup_code=2, reported=2.
 ; The reported code is the cleanup's, so the property is violated.
 
+(set-option :produce-unsat-cores true)
+
 (declare-const fail_code Int)      ; e.g. EADDRINUSE from the failing bind
 (declare-const cleanup_code Int)   ; e.g. EBADF from the rollback close
 (declare-const errno_after_fail Int)
@@ -31,3 +33,6 @@
 
 ; negation of the property "the reported code is the failure's code"
 (assert (! (not (= reported fail_code)) :named property_violated))
+
+(check-sat)
+(get-model)
