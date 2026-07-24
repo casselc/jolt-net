@@ -127,6 +127,7 @@ jobs:
   test:
     name: suite (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -144,7 +145,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: casselc/jolt
-          ref: 1c8fdb97eee58870b9fb9de928430d016c0cf06d
+          ref: 358c42b796842db489a1fdb88b3696af27134a53
           submodules: recursive
           path: jolt-upstream
 
