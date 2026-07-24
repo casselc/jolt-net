@@ -1,0 +1,64 @@
+{:os :linux
+ :arch :x86-64
+ :pointer-bits 64
+ :socket-handle-bytes 4
+ :socklen-bytes 4
+ :const {
+  :af-unspec 0
+  :af-inet 2
+  :af-inet6 10
+  :sock-stream 1
+  :sock-dgram 2
+  :ipproto-tcp 6
+  :ipproto-ipv6 41
+  :sol-socket 1
+  :so-reuseaddr 2
+  :so-error 4
+  :so-rcvbuf 8
+  :so-sndbuf 7
+  :tcp-nodelay 1
+  :ipv6-v6only 26
+  :ai-passive 1
+  :ai-numerichost 4
+  :ai-numericserv 1024
+  :shut-rd 0
+  :shut-wr 1
+  :shut-rdwr 2
+  :msg-nosignal 16384
+  :so-nosigpipe nil
+  :o-nonblock 2048
+  :f-getfl 3
+  :f-setfl 4
+ }
+ :layout {
+  :sockaddr-in {:size 16 :family 0 :port 2 :addr 4}
+  :sockaddr-in6 {:size 28 :family 0 :port 2 :flowinfo 4 :addr 8 :scope-id 24}
+  :sockaddr-storage {:size 128}
+  :addrinfo {:size 48 :flags 0 :family 4 :socktype 8 :protocol 12 :addrlen 16 :canonname 32 :addr 24 :next 40 :addrlen-bytes 4}
+  :sin-len? false
+ }
+ :errno {
+  :eagain 11
+  :ewouldblock 11
+  :einprogress 115
+  :econnrefused 111
+  :econnreset 104
+  :eaddrinuse 98
+  :eaddrnotavail 99
+  :enetunreach 101
+  :ehostunreach 113
+  :etimedout 110
+  :eintr 4
+  :eacces 13
+  :epipe 32
+ }
+ :gai {
+  :noname -2
+  :again -3
+  :fail -4
+  :family -6
+  :service -8
+  :memory -10
+  :system -11
+  :addrfamily nil
+ }}

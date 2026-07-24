@@ -5,7 +5,8 @@
   exits non-zero if any failed. The explicit System/exit matters -- a suite that
   starts sockets or futures can leave non-daemon threads alive, which would hang
   the process after the last test printed PASS."
-  (:require [jolt.net.check :as c]))
+  (:require [jolt.net.check :as c]
+            [jolt.net.target-test :as target-test]))
 
 (defn -main [& _]
   (println "jolt-net test suite")
@@ -29,6 +30,8 @@
                 #(= :monotonic %) (jolt.host/monotonic-source))
   (c/check-pred "fork prerequisite: 16-bit foreign types exist"
                 #(= 2 %) (jolt.ffi/sizeof :uint16))
+
+  (target-test/run!)
 
   (flush)
   (System/exit (c/summary)))

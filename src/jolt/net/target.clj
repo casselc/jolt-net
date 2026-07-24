@@ -1,0 +1,230 @@
+(ns jolt.net.target
+  "Per-target socket ABI facts: constants, struct layouts, handle width, and the
+  error-code tables.
+
+  Pure data and pure functions -- no FFI, no side effects, nothing loaded. That is
+  deliberate: it means a Linux test can assert on the Windows or macOS descriptor
+  as an ordinary value, without pretending that doing so is native validation.
+
+  FAILS CLOSED. An unrecognized target throws rather than falling back to a
+  similar-looking one. Guessing here does not produce a wrong answer, it produces
+  a wrong struct offset, and a wrong struct offset is memory corruption. Targets
+  are keyed on the [os arch pointer-bits] TUPLE for the same reason -- :os alone
+  does not determine a layout.
+
+  Most values here were extracted from the platform's own headers by
+  tools/probe-constants.sh; each descriptor records how it was verified under
+  :evidence, and jolt.net.target-test diffs the probed descriptors against
+  tools/probed/*.edn so drift is a test failure. See docs/PLATFORM-COVERAGE.md."
+  (:require [clojure.string :as str]))
+
+;; --- Linux ------------------------------------------------------------------
+;; :evidence :probed -- tools/probed/linux-x86-64.edn, native cc.
+(def ^:private linux-x86-64
+  {:platform :posix
+   :evidence :probed
+   :handle-type :int                 ; POSIX fd
+   :socklen-type :uint
+   :invalid-handle -1
+   :sin-len? false
+
+   :const {:af-unspec 0 :af-inet 2 :af-inet6 10
+           :sock-stream 1 :sock-dgram 2
+           :ipproto-tcp 6 :ipproto-ipv6 41
+           :sol-socket 1 :so-reuseaddr 2 :so-error 4 :so-rcvbuf 8 :so-sndbuf 7
+           :tcp-nodelay 1 :ipv6-v6only 26
+           :ai-passive 1 :ai-numerichost 4 :ai-numericserv 1024
+           :shut-rd 0 :shut-wr 1 :shut-rdwr 2
+           ;; Linux suppresses SIGPIPE per send() call; there is no SO_NOSIGPIPE.
+           :msg-nosignal 16384 :so-nosigpipe nil
+           :o-nonblock 2048 :f-getfl 3 :f-setfl 4}
+
+   :layout {:sockaddr-in {:size 16 :family 0 :port 2 :addr 4}
+            :sockaddr-in6 {:size 28 :family 0 :port 2 :flowinfo 4 :addr 8 :scope-id 24}
+            :sockaddr-storage {:size 128}
+            ;; NOTE: Linux orders ai_addr BEFORE ai_canonname; Windows and macOS
+            ;; do the reverse. Hardcoding either set is a silent cross-platform bug.
+            :addrinfo {:size 48 :flags 0 :family 4 :socktype 8 :protocol 12
+                       :addrlen 16 :addr 24 :canonname 32 :next 40
+                       :addrlen-type :uint}}
+
+   :errno {:eagain 11 :ewouldblock 11 :einprogress 115
+           :econnrefused 111 :econnreset 104 :eaddrinuse 98 :eaddrnotavail 99
+           :enetunreach 101 :ehostunreach 113 :etimedout 110
+           :eintr 4 :eacces 13 :epipe 32}
+
+   ;; glibc's EAI_* are NEGATIVE; Winsock's are positive. Never compare across.
+   :gai {:noname -2 :again -3 :fail -4 :family -6 :service -8 :memory -10
+         :system -11 :addrfamily nil}})
+
+;; --- Windows ----------------------------------------------------------------
+;; :evidence :probed -- tools/probed/windows-x86-64.edn, mingw headers, binary
+;; executed via WSL interop. The NUMBERS are real; no Winsock CALL has been made
+;; from jolt on Windows. See docs/PLATFORM-COVERAGE.md.
+(def ^:private windows-x86-64
+  {:platform :windows
+   :evidence :probed
+   ;; SOCKET is a pointer-width UNSIGNED handle (probe: 8 bytes), not an int.
+   ;; A valid handle may have its high bit set, so `neg?` and an :int return
+   ;; type are both invalid tests -- only equality with INVALID_SOCKET works.
+   :handle-type :uptr
+   :socklen-type :int
+   :invalid-handle 18446744073709551615  ; (2^64)-1, all bits one
+   :sin-len? false
+
+   :const {:af-unspec 0 :af-inet 2 :af-inet6 23
+           :sock-stream 1 :sock-dgram 2
+           :ipproto-tcp 6 :ipproto-ipv6 41
+           :sol-socket 65535 :so-reuseaddr 4 :so-error 4103
+           :so-rcvbuf 4098 :so-sndbuf 4097
+           :tcp-nodelay 1 :ipv6-v6only 27
+           :ai-passive 1 :ai-numerichost 4 :ai-numericserv 8
+           :shut-rd 0 :shut-wr 1 :shut-rdwr 2
+           ;; Windows has no SIGPIPE, so neither suppression mechanism exists.
+           :msg-nosignal nil :so-nosigpipe nil
+           ;; non-blocking mode is ioctlsocket(FIONBIO), not fcntl
+           :o-nonblock nil :f-getfl nil :f-setfl nil}
+
+   :layout {:sockaddr-in {:size 16 :family 0 :port 2 :addr 4}
+            :sockaddr-in6 {:size 28 :family 0 :port 2 :flowinfo 4 :addr 8 :scope-id 24}
+            :sockaddr-storage {:size 128}
+            ;; ai_canonname precedes ai_addr here (the reverse of Linux), and
+            ;; ai_addrlen is size_t -- 8 bytes, not socklen_t's 4. jolt.mvn-http
+            ;; reads it as :int and only gets away with it because Win64 is
+            ;; little-endian and address lengths are small.
+            :addrinfo {:size 48 :flags 0 :family 4 :socktype 8 :protocol 12
+                       :addrlen 16 :canonname 24 :addr 32 :next 40
+                       :addrlen-type :size_t}}
+
+   ;; Winsock does not use errno for sockets; these are WSAE* values.
+   :errno {:eagain 10035 :ewouldblock 10035
+           ;; a non-blocking connect in flight reports WSAEWOULDBLOCK, not a
+           ;; distinct WSAEINPROGRESS (which on Winsock means something else)
+           :einprogress 10035
+           :econnrefused 10061 :econnreset 10054 :eaddrinuse 10048
+           :eaddrnotavail 10049 :enetunreach 10051 :ehostunreach 10065
+           :etimedout 10060 :eintr 10004 :eacces 10013 :epipe nil}
+
+   :gai {:noname 11001 :again 11002 :fail 11003 :family 10047 :service 10109
+         :memory 8 :system nil :addrfamily nil}})
+
+;; --- macOS ------------------------------------------------------------------
+;; :evidence :documented -- NOT probed. There is no macOS host or cross-compiler
+;; available here, so every number below is from documentation rather than from
+;; that platform's headers. This is the weakest coverage in the project and must
+;; not be described as support. Running tools/probe-constants.sh on a Mac and
+;; committing tools/probed/darwin-*.edn is what would upgrade it.
+(def ^:private darwin
+  {:platform :posix
+   :evidence :documented
+   :handle-type :int
+   :socklen-type :uint
+   :invalid-handle -1
+   ;; BSD-derived: sockaddr byte 0 is the struct length and byte 1 the family,
+   ;; so sin_family sits at offset 1, not 0.
+   :sin-len? true
+
+   :const {:af-unspec 0 :af-inet 2 :af-inet6 30
+           :sock-stream 1 :sock-dgram 2
+           :ipproto-tcp 6 :ipproto-ipv6 41
+           :sol-socket 65535 :so-reuseaddr 4 :so-error 4103
+           :so-rcvbuf 4098 :so-sndbuf 4097
+           :tcp-nodelay 1 :ipv6-v6only 27
+           :ai-passive 1 :ai-numerichost 4 :ai-numericserv 4096
+           :shut-rd 0 :shut-wr 1 :shut-rdwr 2
+           ;; BSD suppresses SIGPIPE per SOCKET via setsockopt, not per send.
+           :msg-nosignal nil :so-nosigpipe 4130
+           :o-nonblock 4 :f-getfl 3 :f-setfl 4}
+
+   :layout {:sockaddr-in {:size 16 :family 1 :port 2 :addr 4}
+            :sockaddr-in6 {:size 28 :family 1 :port 2 :flowinfo 4 :addr 8 :scope-id 24}
+            :sockaddr-storage {:size 128}
+            :addrinfo {:size 48 :flags 0 :family 4 :socktype 8 :protocol 12
+                       :addrlen 16 :canonname 24 :addr 32 :next 40
+                       :addrlen-type :uint}}
+
+   :errno {:eagain 35 :ewouldblock 35 :einprogress 36
+           :econnrefused 61 :econnreset 54 :eaddrinuse 48 :eaddrnotavail 49
+           :enetunreach 51 :ehostunreach 65 :etimedout 60
+           :eintr 4 :eacces 13 :epipe 32}
+
+   :gai {:noname 8 :again 2 :fail 4 :family 5 :service 9 :memory 6
+         :system 11 :addrfamily 1}})
+
+;; --- selection --------------------------------------------------------------
+;; Keyed on the full tuple. Note there is no [:linux :x86 32] or big-endian entry:
+;; those fail closed rather than reusing 64-bit layouts.
+(def ^:private descriptors
+  {[:linux :x86-64 64] linux-x86-64
+   ;; Linux/aarch64 shares these facts with x86-64: same kernel UAPI (the
+   ;; constants come from asm-generic) and the same LP64 layout. Listed
+   ;; explicitly, with that reasoning, rather than reached by an :os fallback --
+   ;; the point of failing closed is that no target is matched by accident.
+   [:linux :aarch64 64] (assoc linux-x86-64 :evidence :inferred-from-linux-x86-64)
+   [:windows :x86-64 64] windows-x86-64
+   [:darwin :aarch64 64] darwin
+   [:darwin :x86-64 64] darwin})
+
+(defn supported-target?
+  "Is `t` (a jolt.host/target-shaped map) a target jolt-net has facts for?"
+  [t]
+  (contains? descriptors [(:os t) (:arch t) (:pointer-bits t)]))
+
+(defn supported-targets
+  "The [os arch pointer-bits] tuples jolt-net knows, for diagnostics and tests."
+  []
+  (vec (sort (keys descriptors))))
+
+(defn descriptor
+  "Socket ABI facts for `t`, or for this host when called with no argument.
+
+  Throws :unsupported-target rather than guessing. The message names the observed
+  target and lists what is supported, because the actionable fix is either to add
+  a probed descriptor or to run on a supported host."
+  ([] (descriptor (jolt.host/target)))
+  ([t]
+   (or (get descriptors [(:os t) (:arch t) (:pointer-bits t)])
+       (throw (ex-info (str "jolt.net: unsupported target "
+                            (:os t) "/" (:arch t) "/" (:pointer-bits t) "-bit")
+                       {:jolt.net/kind :unsupported-target
+                        :jolt.net/target t
+                        :jolt.net/supported (supported-targets)})))))
+
+;; --- accessors --------------------------------------------------------------
+;; Call sites read facts through these rather than reaching into the map, so a
+;; missing key is an error naming the fact instead of a nil that silently becomes
+;; a zero offset or a zero flag.
+
+(defn const [d k]
+  (let [v (get-in d [:const k] ::missing)]
+    (when (= v ::missing)
+      (throw (ex-info (str "jolt.net: no constant " k " for this target")
+                      {:jolt.net/kind :unsupported-target :jolt.net/constant k})))
+    v))
+
+(defn layout [d struct]
+  (or (get-in d [:layout struct])
+      (throw (ex-info (str "jolt.net: no layout for " struct " on this target")
+                      {:jolt.net/kind :unsupported-target :jolt.net/struct struct}))))
+
+(defn offset [d struct field]
+  (let [v (get (layout d struct) field ::missing)]
+    (when (= v ::missing)
+      (throw (ex-info (str "jolt.net: no offset for " struct "/" field)
+                      {:jolt.net/kind :unsupported-target
+                       :jolt.net/struct struct :jolt.net/field field})))
+    v))
+
+(defn errno-code [d k] (get-in d [:errno k]))
+(defn gai-code [d k] (get-in d [:gai k]))
+
+(defn handle-valid?
+  "Is `h` a real socket handle on this target?
+
+  On Win64 a SOCKET is pointer-width unsigned and INVALID_SOCKET is all-bits-one,
+  so a legitimate handle may have its high bit set. Testing `neg?` there would
+  reject valid sockets and accept the invalid one."
+  [d h]
+  (if (= :windows (:platform d))
+    (not= h (:invalid-handle d))
+    (not (neg? h))))

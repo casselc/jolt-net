@@ -10,7 +10,7 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 | Level | Meaning |
 |---|---|
 | **runtime** | Real sockets opened, real syscalls made, on this platform in CI. |
-| **header** | Constants and struct offsets extracted from that platform's real system headers by `tools/probe-constants.sh` and diffed against the committed table. Proves the numbers; proves nothing about calls. |
+| **probed** | `tools/probe-constants.c` compiled against that platform's real system headers and **executed**, so every constant, `sizeof`, and `offsetof` is read from the platform itself and diffed against the committed table. Proves the numbers; proves nothing about calls. |
 | **table** | Only the selection logic is exercised. The numbers themselves are unverified. |
 | **none** | Not covered. |
 
@@ -18,10 +18,10 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 
 | Platform | Constants / layouts | Socket calls | Notes |
 |---|---|---|---|
-| Linux x86-64 | runtime + header | **runtime** | The development and CI platform. |
+| Linux x86-64 | **probed** | **runtime** | The development and CI platform. |
 | Linux aarch64 | table | none | Aliases the x86-64 socket facts: same kernel UAPI, same LP64. An explicit table entry with the checked facts listed — never a `:linux` fallback. |
-| Windows x86-64 | **header** | none | Extracted from real `winsock2.h`/`ws2tcpip.h` via mingw gcc, cross-checked against .NET's `SocketError`/`AddressFamily`. Numbers are trustworthy; **no Winsock call has ever been made from jolt on Windows.** |
-| macOS arm64 / x86-64 | **table** | none | No macOS machine and no compiler available. Constants are from documentation and headers not present on this system. This is the weakest coverage in the project. |
+| Windows x86-64 | **probed** | none | mingw cross-compiles the probe and the resulting `.exe` runs through WSL interop, so the layouts are read from real `winsock2.h`/`ws2tcpip.h` rather than recalled; cross-checked against .NET's `SocketError`/`AddressFamily`. Numbers are trustworthy; **no Winsock call has ever been made from jolt on Windows.** |
+| macOS arm64 / x86-64 | **table** | none | No macOS machine and no cross-compiler available. Every constant is documentation-derived; the descriptor is marked `:evidence :documented` and the suite emits a SKIP rather than a pass. This is the weakest coverage in the project. |
 
 ## Specific residuals
 
@@ -38,8 +38,25 @@ Do not summarize this file as "supports Linux, macOS and Windows."
   the falsifiable half: proving a distinct, boot-relative source.
 - **IPv6** is skipped, not failed, where the host has no `::1`. A SKIP is not a pass.
 
+## What the probe caught
+
+Two facts that a hand-written table gets wrong, both confirmed by running the probe:
+
+- **`addrinfo` field order differs.** Linux places `ai_addr` at 24 and `ai_canonname`
+  at 32; Windows (and macOS) reverse them. Reading one platform's offsets on the
+  other yields a pointer to the wrong field.
+- **Windows `ai_addrlen` is `size_t` (8 bytes)**, not `socklen_t` (4).
+  `jolt.mvn-http` reads it as `:int` and only survives because Win64 is
+  little-endian and address lengths are small.
+
+The table test is non-vacuous: corrupting `AF_INET6` or swapping
+`ai_addr`/`ai_canonname` makes it fail with the exact field named.
+
 ## Making this better
 
-The cheap win is a macOS runner: it would move an entire column from *table* to
-*runtime*. Second is a Windows runner, which would upgrade *header* to *runtime* and
-retire the `:uptr` and `WSAStartup` residuals above.
+The cheap win is running `tools/probe-constants.sh` on any Mac and committing
+`tools/probed/darwin-*.edn` — that alone moves macOS from *table* to *probed* with
+no code change, because the test picks the file up automatically.
+
+A real Windows runner would upgrade Windows from *probed* to *runtime* and retire
+the `:uptr` marshaling and `WSAStartup` residuals above.
