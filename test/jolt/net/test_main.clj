@@ -8,7 +8,10 @@
   (:require [jolt.net.check :as c]
             [jolt.net.target-test :as target-test]
             [jolt.net.socket-test :as socket-test]
-            [jolt.net.resolver-test :as resolver-test]))
+            [jolt.net.resolver-test :as resolver-test]
+            [jolt.net.address-test :as address-test]
+            [jolt.net.address-property-test]
+            [clojure.test :as ct]))
 
 (defn -main [& _]
   (println "jolt-net test suite")
@@ -34,8 +37,21 @@
                 #(= 2 %) (jolt.ffi/sizeof :uint16))
 
   (target-test/run!)
+  (address-test/run!)
   (resolver-test/run!)
   (socket-test/run!)
+
+  ;; Generative properties run under clojure.test (hegel's integration reports
+  ;; through it), so fold its counters into the same exit code.
+  (c/section "generative properties (jolt-hegel)")
+  (let [r (ct/run-tests 'jolt.net.address-property-test)]
+    (c/check "hegel address properties report no failures" 0 (+ (:fail r) (:error r)))
+    ;; A suite that ran ZERO properties also reports zero failures. Assert the
+    ;; properties actually executed, or a require that silently stopped loading
+    ;; would read as success.
+    (c/check-pred "hegel properties actually ran" pos? (:test r))
+    (c/check-pred "hegel properties made assertions" pos? (:pass r))
+    (println (str "     " (:test r) " properties, " (:pass r) " assertions passed")))
 
   (flush)
   (System/exit (c/summary)))
