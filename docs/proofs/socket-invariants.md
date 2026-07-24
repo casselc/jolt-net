@@ -205,9 +205,11 @@ listener and requires `O_NONBLOCK` before the rest of the poller suite runs. It
 also injects the motivating bad outcome—apparent `F_SETFL` success followed by
 a read-back without the bit—and requires a fail-closed exception after the
 second `F_GETFL`. The core FFI test exercises the same variadic `fcntl` binding
-and transition. Only a Darwin arm64 runtime rerun can close the
-platform-specific ABI evidence; the SMT model does not pretend to model Apple's
-calling convention.
+and transition. The complete Darwin arm64 gate passed with source-built Chez
+10.4.1 for commit `65a0f1e` in
+[CI run 30078697403](https://github.com/casselc/jolt-net/actions/runs/30078697403),
+closing the platform-specific runtime evidence for this bounded surface. The
+SMT model still does not pretend to model Apple's calling convention.
 
 **Wake-epoch invariant.** A Boolean-only coalescing gate has another independent
 race. Await can drain the old byte, a producer can observe the old `true` gate

@@ -22,7 +22,7 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 | Linux x86-64 | **probed** | **runtime** | **runtime** | The development and CI platform. Real `fcntl`, `poll`, pipe-wake, sliced byte I/O, EOF, non-blocking connect/`SO_ERROR`, mutation wake, and close races are exercised. |
 | Linux aarch64 | table | none | none | Aliases the x86-64 socket facts: same kernel UAPI, same LP64. An explicit table entry with the checked facts listed — never a `:linux` fallback. |
 | Windows x86-64 | **probed** | none | none | Probed on a real Windows CI runner (and independently via mingw + WSL interop, which agree). Numbers are trustworthy; **no Winsock call has ever been made from jolt on Windows** — there is no packaged Chez Scheme for Windows runners, so the suite cannot run there yet. |
-| macOS arm64 | **probed** | **runtime** | **candidate** | Uses `poll(2)`, a variadic-ABI-correct `fcntl`, and the same owner-independent self-pipe protocol as Linux, with Darwin's distinct 32-bit `nfds_t` binding. The complete native suite is a required macOS CI gate for this revision. |
+| macOS arm64 | **probed** | **runtime** | **runtime** | The complete native suite passes with source-built Chez 10.4.1: variadic-ABI-correct `fcntl`, `poll(2)`, non-blocking connect/`SO_ERROR`, sliced byte I/O, SIGPIPE, close races, and the owner-independent self-pipe protocol, with Darwin's distinct 32-bit `nfds_t` binding. |
 | macOS x86-64 | **table** | none | none | Shares the arm64 descriptor: these are SDK facts rather than arch facts on macOS. Only arm64 is machine-checked. |
 
 ## Specific residuals
@@ -36,13 +36,14 @@ Do not summarize this file as "supports Linux, macOS and Windows."
   tested owner-independent wake transport such as a loopback UDP pair. The
   non-blocking connect API fails closed before resolution or socket creation on
   Windows until that backend and real `getsockopt(SO_ERROR)` calls are verified.
-- **macOS readiness validation.** The earlier gate showed that a typed
+- **macOS runtime evidence.** The earlier gate showed that a typed
   three-argument signature is not enough for variadic `fcntl` on Apple arm64:
   the third argument uses the variadic stack ABI. The core binding now declares
   `{:varargs-after 2}`, and jolt-net reads `F_GETFL` back before marking a
-  handle. Support remains a candidate until the complete poller, close-race,
-  SIGPIPE, and sliced-I/O suite passes on the macOS runner for this exact
-  revision. There is no fallback to the old uninterruptible accept path.
+  handle. The complete poller, connect, close-race, SIGPIPE, and sliced-I/O
+  suite passed on the macOS arm64 runner for commit `65a0f1e` in
+  [CI run 30078697403](https://github.com/casselc/jolt-net/actions/runs/30078697403).
+  There is no fallback to the old uninterruptible accept path.
 - **Readiness hot-path shape.** Listener, connected, and accepted descriptors
   enter nonblocking mode once. A scoped core FFI primitive pins and exposes the
   validated interior pointer for every byte-array slice, so partial recv/send
