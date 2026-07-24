@@ -1,7 +1,8 @@
 # `clojure.platform`: a versioned portability boundary
 
-Status: design only, 2026-07-23. This document does not create namespaces,
-rename `jolt-net`, or claim a common implementation already exists.
+Status: design plus one Jolt composition witness, 2026-07-24. This document does
+not create namespaces, rename `jolt-net`, or claim a cross-runtime
+implementation already exists.
 
 ## Decision
 
@@ -211,8 +212,7 @@ Operation state, partial-I/O continuation, portable stream lifecycle, and
 backpressure live above that seam and are shared unchanged by every adapter.
 Readiness bookkeeping, if the adapter uses it, stays below the seam.
 
-The current Jolt adapter now has the native seam needed by `:dial!` without
-prematurely claiming that the portable connector already exists:
+The current Jolt adapter exposes the native seam needed by `:dial!`:
 
 ```clojure
 (net/try-connect endpoint-or-resolved-addresses opts)
@@ -232,6 +232,21 @@ absolute deadline, cancellation token, candidate advancement, and failed-socket
 cleanup. This is intentionally below the eventual blocking/async `:dial!`
 handler: putting relative timeout or Happy Eyeballs policy into the FFI adapter
 would make that policy Jolt-specific and unportable.
+
+`teensyp.client` in jolt-tcp is now the first concrete composition witness. It
+uses only `jolt.net`—not raw FFI—to implement an opaque outbound connection,
+one monotonic connect deadline across all resolver candidates, exact
+failed-socket cleanup, FIFO read/write operation gates, partial-progress-safe
+send and receive, per-operation deadlines, half-close, cached EOF, and
+idempotent close. nREPL's client transport passes its framing suite on top of
+that API without retaining a descriptor or native declaration.
+
+That implementation is evidence for the split, not yet the portable
+`clojure.platform.tcp` constructor sketched above: `teensyp.client` currently
+calls Jolt's concrete `jolt.net` namespace rather than a versioned socket/clock
+handler map. Extracting those calls behind the SPI and running the same TCP
+state machine against Jolt, JVM, and fake adapters remains the portability
+step.
 
 ### `clojure.platform.http`
 
