@@ -109,14 +109,14 @@
          :memory 8 :system nil :addrfamily nil}})
 
 ;; --- macOS ------------------------------------------------------------------
-;; :evidence :documented -- NOT probed. There is no macOS host or cross-compiler
-;; available here, so every number below is from documentation rather than from
-;; that platform's headers. This is the weakest coverage in the project and must
-;; not be described as support. Running tools/probe-constants.sh on a Mac and
-;; committing tools/probed/darwin-*.edn is what would upgrade it.
+;; :evidence :probed -- tools/probed/darwin-aarch64.edn, produced by compiling
+;; and running tools/probe-constants.c on a macOS arm64 CI runner.
+;;
+;; The aarch64 probe also backs the x86-64 entry: these constants and layouts are
+;; SDK facts rather than arch facts on macOS. Only aarch64 is machine-checked.
 (def ^:private darwin
   {:platform :posix
-   :evidence :documented
+   :evidence :probed
    :handle-type :int
    :socklen-type :uint
    :invalid-handle -1
@@ -132,8 +132,10 @@
            :tcp-nodelay 1 :ipv6-v6only 27
            :ai-passive 1 :ai-numerichost 4 :ai-numericserv 4096
            :shut-rd 0 :shut-wr 1 :shut-rdwr 2
-           ;; BSD suppresses SIGPIPE per SOCKET via setsockopt, not per send.
-           :msg-nosignal nil :so-nosigpipe 4130
+           ;; macOS offers BOTH: MSG_NOSIGNAL per send (0x80000, unlike Linux's
+           ;; 0x4000) and SO_NOSIGPIPE per socket. This table originally said
+           ;; MSG_NOSIGNAL was absent here -- CI probing a real Mac corrected it.
+           :msg-nosignal 524288 :so-nosigpipe 4130
            :o-nonblock 4 :f-getfl 3 :f-setfl 4}
 
    :layout {:sockaddr-in {:size 16 :family 1 :port 2 :addr 4}

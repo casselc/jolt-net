@@ -20,8 +20,9 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 |---|---|---|---|
 | Linux x86-64 | **probed** | **runtime** | The development and CI platform. |
 | Linux aarch64 | table | none | Aliases the x86-64 socket facts: same kernel UAPI, same LP64. An explicit table entry with the checked facts listed — never a `:linux` fallback. |
-| Windows x86-64 | **probed** | none | mingw cross-compiles the probe and the resulting `.exe` runs through WSL interop, so the layouts are read from real `winsock2.h`/`ws2tcpip.h` rather than recalled; cross-checked against .NET's `SocketError`/`AddressFamily`. Numbers are trustworthy; **no Winsock call has ever been made from jolt on Windows.** |
-| macOS arm64 / x86-64 | **table** | none | No macOS machine and no cross-compiler available. Every constant is documentation-derived; the descriptor is marked `:evidence :documented` and the suite emits a SKIP rather than a pass. This is the weakest coverage in the project. |
+| Windows x86-64 | **probed** | none | Probed on a real Windows CI runner (and independently via mingw + WSL interop, which agree). Numbers are trustworthy; **no Winsock call has ever been made from jolt on Windows** — there is no packaged Chez Scheme for Windows runners, so the suite cannot run there yet. |
+| macOS arm64 | **probed** | **runtime** | Probed and fully exercised on a macOS arm64 CI runner. |
+| macOS x86-64 | **table** | none | Shares the arm64 descriptor: these are SDK facts rather than arch facts on macOS. Only arm64 is machine-checked. |
 
 ## Specific residuals
 
@@ -40,7 +41,9 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 
 ## What the probe caught
 
-Two facts that a hand-written table gets wrong, both confirmed by running the probe:
+Three facts a hand-written table got wrong. The first two were caught locally;
+the third was caught only once CI ran the probe on a real Mac, which is the
+whole argument for doing it:
 
 - **`addrinfo` field order differs.** Linux places `ai_addr` at 24 and `ai_canonname`
   at 32; Windows (and macOS) reverse them. Reading one platform's offsets on the
@@ -48,15 +51,20 @@ Two facts that a hand-written table gets wrong, both confirmed by running the pr
 - **Windows `ai_addrlen` is `size_t` (8 bytes)**, not `socklen_t` (4).
   `jolt.mvn-http` reads it as `:int` and only survives because Win64 is
   little-endian and address lengths are small.
+- **macOS has `MSG_NOSIGNAL`** (`0x80000`), and this table said it did not.
+  Documentation commonly presents `SO_NOSIGPIPE` as the BSD mechanism, which is
+  true but not exclusive. The wrong value was benign — the socket option path
+  still suppresses SIGPIPE — but it was wrong, and only a real Mac could say so.
 
 The table test is non-vacuous: corrupting `AF_INET6` or swapping
 `ai_addr`/`ai_canonname` makes it fail with the exact field named.
 
 ## Making this better
 
-The cheap win is running `tools/probe-constants.sh` on any Mac and committing
-`tools/probed/darwin-*.edn` — that alone moves macOS from *table* to *probed* with
-no code change, because the test picks the file up automatically.
+The remaining gap is Windows *runtime* coverage. It needs a Chez Scheme build for
+Windows runners; until then the `:uptr` handle marshaling, the `INVALID_SOCKET`
+comparison against a real handle, and once-only `WSAStartup` stay unexercised.
 
-A real Windows runner would upgrade Windows from *probed* to *runtime* and retire
-the `:uptr` marshaling and `WSAStartup` residuals above.
+CI (`.github/workflows/ci.yml`) re-probes every platform on each push and fails
+the build if a committed descriptor disagrees with that platform's real headers,
+so these tables cannot silently drift.

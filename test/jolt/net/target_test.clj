@@ -112,12 +112,14 @@
   ;; Make the macOS gap explicit rather than silent. If someone probes a Mac and
   ;; commits the file, this flips from SKIP to a real comparison automatically.
   (c/section "target: coverage honesty")
-  (c/check "macOS is declared unverified, not probed"
-           :documented (:evidence (t/descriptor {:os :darwin :arch :aarch64 :pointer-bits 64})))
+  ;; macOS was documentation-derived until a CI runner probed it; the descriptor
+  ;; records which, and the comparison below runs as soon as the file exists.
+  (c/check "macOS is now machine-probed"
+           :probed (:evidence (t/descriptor {:os :darwin :arch :aarch64 :pointer-bits 64})))
   (if (read-probe "darwin" "aarch64")
     (check-against-probe "darwin/aarch64" [:darwin :aarch64 64])
     (c/skip "darwin/aarch64 vs probed headers"
-            "no macOS host reachable; every darwin constant is documentation-derived"))
+            "tools/probed/darwin-aarch64.edn missing; run CI or probe on a Mac"))
   (c/check "linux/aarch64 records that it is inferred, not probed"
            :inferred-from-linux-x86-64
            (:evidence (t/descriptor {:os :linux :arch :aarch64 :pointer-bits 64}))))

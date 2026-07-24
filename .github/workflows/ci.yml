@@ -146,21 +146,36 @@ jobs:
         run: brew install chezscheme
 
       # bin/joltc searches for `chez` then `chezscheme` -- not `scheme`, which is
-      # what the Debian package installs. Provide whichever name is missing.
-      - name: Normalize the Chez binary name
+      # the name the Debian package installs.
+      #
+      # This must be a WRAPPER SCRIPT, not a symlink. Chez locates its .boot
+      # files relative to the executable path, so a symlink in ~/bin makes it
+      # search ~/bin and fail with "cannot find compatible chez.boot in search
+      # path". exec'ing the real binary keeps argv[0] pointing at the install.
+      - name: Provide a `chez` entry point
         shell: bash
         run: |
           set -eu
-          mkdir -p "$HOME/bin"
-          found=""
-          for c in chez chezscheme scheme; do
-            if command -v "$c" >/dev/null 2>&1; then found=$(command -v "$c"); break; fi
-          done
-          [ -n "$found" ] || { echo "no Chez Scheme on PATH"; exit 1; }
-          echo "found Chez at $found"
-          ln -sf "$found" "$HOME/bin/chez"
-          echo "$HOME/bin" >> "$GITHUB_PATH"
-          "$found" --version 2>&1 | head -1 || true
+          if command -v chez >/dev/null 2>&1; then
+            echo "chez already on PATH at $(command -v chez)"
+          else
+            found=""
+            for c in chezscheme scheme; do
+              if command -v "$c" >/dev/null 2>&1; then found=$(command -v "$c"); break; fi
+            done
+            [ -n "$found" ] || { echo "no Chez Scheme on PATH"; exit 1; }
+            echo "wrapping $found as chez"
+            mkdir -p "$HOME/bin"
+            printf '#!/bin/sh\nexec %s "$@"\n' "$found" > "$HOME/bin/chez"
+            chmod +x "$HOME/bin/chez"
+            echo "$HOME/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Verify Chez actually starts
+        shell: bash
+        run: |
+          set -eu
+          echo '(begin (display (scheme-version)) (newline) (exit))' | chez -q
 
       - name: Install jolt-hegel (property-test engine)
         working-directory: jolt-net
