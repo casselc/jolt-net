@@ -201,14 +201,14 @@ No layer above TCP may infer EOF from a zero-length success, assume one write
 drains a buffer, reuse a submitted byte window before its terminal completion,
 or observe a native descriptor.
 
-Peer half-close is asynchronous across the connection. `shutdown(:write)`
-orders the sender's own writes before FIN, but it is not a barrier that makes
-FIN synchronously observable by the receiver. A non-blocking receive with no
-buffered payload may still report `would-block`; the adapter waits for
+Successful send and peer half-close are asynchronous across the connection.
+They order the sender's byte stream, including writes before FIN, but neither is
+a barrier that makes bytes or FIN synchronously observable by the receiver. A
+non-blocking receive may still report `would-block`; the adapter waits for
 read/hangup readiness and retries under the operation's existing absolute
-deadline. After buffered payload is exhausted and FIN is observable, the next
-positive-length receive reports the distinct EOF value. A zero-length request
-alone reports numeric zero and never stands in for EOF.
+deadline. It consumes all ordered payload before, after FIN becomes observable,
+the next positive-length receive reports the distinct EOF value. A zero-length
+request alone reports numeric zero and never stands in for EOF.
 
 Most of this layer is one pure constructor over the socket and clock handlers:
 

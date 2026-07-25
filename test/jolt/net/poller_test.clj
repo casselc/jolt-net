@@ -45,6 +45,20 @@
       (quot (+ remaining 999999) 1000000)
       0)))
 
+(defn- read-ready-by!
+  "Attempt one positive-length non-blocking read, waiting only after
+  would-block and retrying under the caller's absolute monotonic deadline."
+  [poller socket dest offset length deadline]
+  (loop []
+    (let [result (net/try-read-bytes! socket dest offset length)]
+      (if (= net/would-block result)
+        (if (< (jolt.host/monotonic-nanos) deadline)
+          (do
+            (net/await-ready poller (remaining-ms deadline))
+            (recur))
+          net/would-block)
+        result))))
+
 (defn- complete-connect-by!
   "The connector-layer composition this substrate is intended to enable:
   register once, retry against ONE absolute monotonic deadline, and resolve
@@ -285,8 +299,10 @@
         (finally (net/close! after-socket)))))
 
   (c/section "non-blocking byte I/O")
-  (let [[client server] (connected-pair)]
+  (let [[client server] (connected-pair)
+        p (net/open-poller)]
     (try
+      (net/register! p server #{:read})
       (let [dest (byte-array 6)
             src (byte-array [10 20 30 40 50])]
         (c/check "empty non-blocking read reports would-block"
@@ -296,46 +312,22 @@
         (c/check "slice write reports its byte count"
                  3 (net/try-write-bytes! client src 1 3))
         (c/check "slice read reports its byte count"
-                 3 (net/try-read-bytes! server dest 2 3))
+                 3 (read-ready-by! p server dest 2 3
+                                   (+ (jolt.host/monotonic-nanos) 2000000000)))
         (c/check "read and write honor both array offsets"
                  [0 0 20 30 40 0] (vec dest))
-        (let [p (net/open-poller)
-              deadline (+ (jolt.host/monotonic-nanos) 2000000000)
-              saw-ready? (atom false)]
-          (try
-            (net/register! p server #{:read})
-            (net/shutdown! client :write)
-            ;; Peer shutdown is not a cross-socket synchronization barrier.
-            ;; Darwin may still report would-block until FIN becomes readable.
-            ;; Once that happens, retry only after observed readiness and under
-            ;; the original absolute deadline.
-            (let [initial (net/try-read-bytes! server dest 0 1)
-                  result
-                  (if (= net/would-block initial)
-                    (loop []
-                      (let [ready (net/await-ready p (remaining-ms deadline))]
-                        (cond
-                          (seq ready)
-                          (do
-                            (reset! saw-ready? true)
-                            (let [r (net/try-read-bytes! server dest 0 1)]
-                              (if (and (= net/would-block r)
-                                       (< (jolt.host/monotonic-nanos) deadline))
-                                (recur)
-                                r)))
-
-                          (< (jolt.host/monotonic-nanos) deadline)
-                          (recur)
-
-                          :else net/would-block)))
-                    initial)]
-              (c/check "a would-block half-close path observes readiness before retry"
-                       true
-                       (or (not= net/would-block initial) @saw-ready?))
-              (c/check "shutdown-write is observed as the EOF value"
-                       net/eof result))
-            (finally (net/close! p)))))
-      (finally (net/close! client) (net/close! server))))
+        (net/shutdown! client :write)
+        ;; A successful peer send or shutdown orders that peer's stream, but
+        ;; neither synchronizes receiver readiness. Darwin may still report
+        ;; would-block until the bytes or FIN become readable.
+        (c/check "shutdown-write is observed as the EOF value"
+                 net/eof
+                 (read-ready-by! p server dest 0 1
+                                 (+ (jolt.host/monotonic-nanos) 2000000000))))
+      (finally
+        (net/close! p)
+        (net/close! client)
+        (net/close! server))))
 
   (c/section "short operation leases")
   (let [listener (net/listen (net/endpoint "127.0.0.1" 0))

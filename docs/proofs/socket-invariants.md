@@ -426,27 +426,32 @@ data-flow property.
 
 ---
 
-## 5. Peer half-close becomes EOF through readiness, not synchronization
+## 5. Peer stream effects become observable through readiness, not synchronization
 
-**Bounded claim.** For a non-blocking receiver with no buffered payload, peer
-`shutdown(:write)` may be followed by `would-block`. Once FIN is
-readiness-visible and buffered payload is exhausted, the next positive-length
-receive returns the distinct EOF value. A zero-length receive alone returns
-numeric zero; it is never evidence of FIN.
+**Bounded claim.** A successful peer send or `shutdown(:write)` orders the
+sender's stream but does not synchronize receiver readiness. A non-blocking
+receive may still return `would-block`; after payload becomes readiness-visible
+it is consumed in order, and after FIN becomes readiness-visible and payload is
+exhausted, the next positive-length receive returns the distinct EOF value. A
+zero-length receive alone returns numeric zero; it is never evidence of FIN.
 
 **Counterexample to the stronger claim.** Native macOS arm64 CI run
-`30144054281` executed the sender's shutdown and then immediately attempted the
-receiver's non-blocking read. Darwin returned `would-block`, disproving the
-earlier test assumption that peer shutdown was a cross-socket synchronization
-barrier. Linux commonly made the same test pass because FIN happened to be
-observable before the read, but that timing was not a portable contract.
+`30144054281` first completed a three-byte sender write, then immediately
+attempted the peer's non-blocking read. Darwin returned `would-block`. The
+queued payload consequently remained ahead of the later FIN, so a subsequent
+read after shutdown returned one payload byte rather than EOF. This disproves
+both stronger assumptions: neither successful send nor peer shutdown is a
+cross-socket synchronization barrier. Linux commonly made the same test pass
+because bytes and FIN happened to be observable before the reads, but that
+timing was not a portable contract.
 
-**Design and executable control.** `jolt.net.poller-test` now registers the
-receiver for read readiness before shutdown. If the first read is
-`would-block`, it awaits read/hangup readiness and retries under one absolute
-monotonic deadline; it accepts immediate EOF as the faster valid execution.
-The test separately requires a zero-length read to return zero and the eventual
-positive-length read to return `jolt.net/eof`.
+**Design and executable control.** `jolt.net.poller-test` registers the receiver
+before send, and one bounded helper handles both payload and terminal reads:
+attempt once; only on `would-block`, await read/hangup readiness; then retry
+under the caller's one absolute monotonic deadline. The test requires the three
+payload bytes and offsets to be exact before shutting down the peer write side,
+then requires the eventual positive-length read to return `jolt.net/eof`. It
+separately requires a zero-length read to return zero.
 
 This is an environmental temporal premise, not a useful SMT state-space claim:
 an SMT model saying “FIN is visible after readiness” would merely assume the
