@@ -195,9 +195,23 @@
 
   Admission linearizes on a CAS state shared with close. The write-handle lease
   is acquired while admission is held, so close cannot pass the drain point
-  between admission and descriptor use."
+  between admission and descriptor use.
+
+  There is a second way to get nil, and it is not a fault. The awaiting caller
+  that close just woke runs `finish-close!` from its own finally, and that
+  retires BOTH wake handles. So the sender can already be closed while close is
+  still walking its sequence -- which simply means the boundary completed
+  underneath this caller, exactly the situation nil already describes. Only a
+  use-after-close is absorbed that way; any other acquire failure still
+  propagates."
   [poller]
-  (let [admission (:wake-admission poller)]
+  (let [admission (:wake-admission poller)
+        unadmit! (fn []
+                   (loop []
+                     (let [s @admission]
+                       (if (compare-and-set! admission s (update s :writers dec))
+                         nil
+                         (recur)))))]
     (loop []
       (let [old @admission]
         (if-not (= :open (:phase old))
@@ -206,12 +220,10 @@
             (try
               (h/acquire! (:write (:wake poller)))
               (catch :default e
-                (loop []
-                  (let [s @admission]
-                    (if (compare-and-set! admission s (update s :writers dec))
-                      nil
-                      (recur))))
-                (throw e)))
+                (unadmit!)
+                (if (= :use-after-close (:jolt.net/op (ex-data e)))
+                  nil
+                  (throw e))))
             (recur)))))))
 
 (defn release-wake-write!
@@ -341,9 +353,12 @@
         nil
         (catch :default e e)
         (finally (release-wake-write! poller lease)))
-      ;; Unreachable from close!, which publishes before it retires admission.
-      (err/invalid-ex :close "wake sends were retired before the terminal wake"
-                      {:jolt.net/requires :wake-transport}))))
+      ;; No lease. Close publishes BEFORE it retires admission, so this can only
+      ;; mean the await that close already woke -- via the acknowledged :clear
+      ;; mutation's own wake, one step earlier -- has exited and run
+      ;; finish-close! underneath us, retiring the transport. The boundary is
+      ;; already met and nothing is stranded, so this is nil, not a failure.
+      nil)))
 
 (defn wake-transport?
   "Does this poller have a wake transport beneath it?

@@ -49,11 +49,19 @@
            ;; Task W3. Same dependency-free rule as :blocking-test and
            ;; :nonblocking-test. This one DOES exercise the poller's shared
            ;; token machinery, but over the Windows WSAPoll readiness backend
-           ;; and through the internal wake-less adapter -- the public Windows
-           ;; poller is still fail-closed. See docs/WINDOWS-RUNTIME-SEQUENCE.md
-           ;; task W3.
+           ;; and through the internal wake-less adapter. That adapter is still
+           ;; a poller built WITHOUT a waker, and its refusals are still what
+           ;; this alias proves. See docs/WINDOWS-RUNTIME-SEQUENCE.md task W3.
            :wsapoll-test {:extra-paths ["test"]
-                          :main-opts ["-m" "jolt.net.wsapoll-test-main"]}}
+                          :main-opts ["-m" "jolt.net.wsapoll-test-main"]}
+           ;; Task W4. Same dependency-free rule as the three aliases above.
+           ;; Unlike them it drives the PUBLIC jolt.net/open-poller and the
+           ;; public blocking accept, because W4's claim is precisely that
+           ;; those now work on Windows over an owner-independent wake
+           ;; transport. See docs/WINDOWS-RUNTIME-SEQUENCE.md task W4.
+           :poller-wake-test {:extra-paths ["test"]
+                              :main-opts
+                              ["-m" "jolt.net.poller-wake-test-main"]}}
 
  ;; Deliberately NOT `joltc -M:test`: a bare `joltc` resolves to the stock
  ;; v0.4.15 on PATH, which cannot load this library at all.
