@@ -5,10 +5,12 @@
  * this prints what the headers actually say, so a drift between table and
  * reality is a test failure rather than a memory-corruption bug months later.
  *
- * Cross-compiles and RUNS for Windows from Linux via mingw + WSL interop, so
+ * Windows builds must also RUN on the target. CI uses native MSVC for ARM64;
+ * the earlier x86_64 evidence also ran its MinGW build on Windows. Either way,
  * the Windows column is genuinely probed rather than guessed.
  *
- * Build/run through tools/probe-constants.sh.
+ * POSIX and Windows x86_64 use tools/probe-constants.sh. The native Windows
+ * ARM64 preview compiles and runs this source directly with MSVC.
  */
 #ifndef _WIN32
 #  ifdef __APPLE__
@@ -69,7 +71,18 @@ int main(void) {
            sizeof(int)
 #endif
     );
-    printf(" :socklen-bytes %zu\n", sizeof(socklen_t));
+    /* Winsock uses int for the address-length parameters accepted and
+       returned by bind/connect/accept/getsockname/getpeername. MinGW exposes
+       a compatibility socklen_t typedef, but the native MSVC headers do not;
+       spell the Windows ABI fact directly so this probe compiles with the
+       platform toolchain instead of accidentally depending on MinGW. */
+    printf(" :socklen-bytes %zu\n",
+#ifdef _WIN32
+           sizeof(int)
+#else
+           sizeof(socklen_t)
+#endif
+    );
 #ifdef _WIN32
     printf(" :nfds-bytes nil\n");
 #else

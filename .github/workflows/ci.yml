@@ -1,22 +1,24 @@
 # jolt-net CI.
 #
-# Two independent jobs, because they prove different things and have very
+# Independent jobs prove different things and have very
 # different prerequisites:
 #
 #   probe — compiles tools/probe-constants.c against each platform's OWN headers
-#           and runs it. Needs only a C compiler, so it covers all three
-#           platforms. This is what turns the per-target socket tables from
-#           remembered numbers into checked ones, and it is the only way the
-#           macOS column becomes real.
+#           and runs it. Needs only a C compiler, so it covers every native
+#           target in the matrix. This is what turns the per-target socket tables from
+#           remembered numbers into checked ones.
 #
 #   test  — the full suite. Needs the forked joltc host/FFI primitives, which
 #           means checking out an exact casselc/jolt revision and building a
 #           matching Chez Scheme.
 #
-# Windows is deliberately probe-only for now. The current Jolt runtime path and
-# real Winsock calls have not been characterized together, so source-building
-# Chez here would turn an ABI claim into a misleading runtime-coverage claim.
-# That distinction is stated here rather than hidden, and
+# Windows deliberately has native source-mode gates but no socket-runtime gate.
+# x86_64 has a committed descriptor and can load the production namespaces.
+# The ARM64 preview first compiles/runs the ABI probe with native MSVC and
+# uploads the result as review evidence; until that evidence becomes a committed
+# descriptor, source Jolt must identify the host and jolt-net must fail closed.
+# The current readiness implementation is POSIX poll(2), so treating either job
+# as networking runtime coverage would be misleading.
 # docs/PLATFORM-COVERAGE.md says the same.
 
 name: ci
@@ -29,12 +31,27 @@ on:
 
 jobs:
   probe:
-    name: probe ABI (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: probe ABI (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - name: Linux x86_64
+            runner: ubuntu-24.04
+            artifact: linux-x86-64
+          - name: Linux aarch64
+            runner: ubuntu-24.04-arm
+            artifact: linux-aarch64
+          - name: macOS arm64
+            runner: macos-15
+            artifact: darwin-aarch64
+          - name: macOS x86_64
+            runner: macos-15-intel
+            artifact: darwin-x86-64
+          - name: Windows x86_64
+            runner: windows-2022
+            artifact: windows-x86-64
     steps:
       - uses: actions/checkout@v4
 
@@ -61,7 +78,7 @@ jobs:
       - name: Upload probed ABI facts
         uses: actions/upload-artifact@v4
         with:
-          name: probed-${{ matrix.os }}
+          name: probed-${{ matrix.artifact }}
           # Upload only the file produced on this runner.  The checkout already
           # contains the other committed probes; uploading the whole directory
           # makes the aggregate job compare (for example) the committed Darwin
@@ -74,7 +91,7 @@ jobs:
   tables:
     name: tables match probed headers
     needs: probe
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -125,14 +142,26 @@ jobs:
           exit $drift
 
   test:
-    name: suite (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    name: POSIX runtime suite (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        # Windows remains ABI-probe-only; see the header comment.
-        os: [ubuntu-latest, macos-latest]
+        # Windows has a separate portable gate; see the header comment.
+        include:
+          - name: Linux x86_64
+            runner: ubuntu-24.04
+            artifact: linux-x86-64
+          - name: Linux aarch64
+            runner: ubuntu-24.04-arm
+            artifact: linux-aarch64
+          - name: macOS arm64
+            runner: macos-15
+            artifact: darwin-aarch64
+          - name: macOS x86_64
+            runner: macos-15-intel
+            artifact: darwin-x86-64
     steps:
       - name: Checkout jolt-net
         uses: actions/checkout@v4
@@ -145,7 +174,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: casselc/jolt
-          ref: ecf7728f15d8b8f858327c47dbd8b751eb36798c
+          ref: e749f154
           submodules: recursive
           path: jolt-upstream
 
@@ -221,11 +250,37 @@ jobs:
           chez --version | tee /tmp/chez-version
           grep -Fq '10.4.1' /tmp/chez-version
 
-      # Best-effort: libhegel is a downloaded native library, and a release-asset
-      # fetch is not a reason to lose the socket coverage. The suite degrades to
-      # SKIP for the generative properties if it is unavailable.
+      # libhegel 0.30.1 does not publish a Darwin/x86_64 release asset. Keep the
+      # full property suite on Intel macOS by building that exact tagged source
+      # with its declared minimum Rust toolchain, then using jolt-hegel's
+      # documented user-supplied-library path. This is CI input, not a
+      # jolt-hegel-owned release artifact.
+      - name: Checkout pinned libhegel source (macOS x86_64)
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        uses: actions/checkout@v4
+        with:
+          repository: hegeldev/hegel-rust
+          ref: f81c6cceabe3c6695a249588c751a5ce93dffa00
+          persist-credentials: false
+          path: hegel-rust
+
+      - name: Build pinned libhegel 0.30.1 (macOS x86_64)
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        working-directory: hegel-rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.86.0 --profile minimal
+          cargo +1.86.0 build --locked -p hegeltest-c --release
+          library="$PWD/target/release/libhegel_c.dylib"
+          test -f "$library"
+          echo "HEGEL_LIBHEGEL_LIBRARY=$library" >> "$GITHUB_ENV"
+
+      # The property layer is part of the gate, not an optional embellishment:
+      # never report a green platform row after silently skipping it. Intel
+      # macOS uses the exact-source build above because no release asset exists;
+      # the remaining targets fetch jolt-hegel's pinned upstream libhegel asset.
       - name: Install jolt-hegel (property-test engine)
-        continue-on-error: true
         working-directory: jolt-net
         env:
           JOLT_UPSTREAM: ${{ github.workspace }}/jolt-upstream
@@ -235,6 +290,38 @@ jobs:
         working-directory: jolt-net
         shell: bash
         run: ./tools/probe-constants.sh native
+
+      # The checked-in Linux/aarch64 descriptor intentionally aliases the
+      # x86_64 descriptor instead of relying on a broad :linux fallback. Until
+      # the first arm64 artifact is committed, prove that alias directly:
+      # normalize only the probe's architecture label, then require every
+      # constant, width, sizeof, and offsetof to equal the checked x86_64 facts.
+      - name: Verify Linux aarch64 ABI matches the explicit descriptor
+        if: runner.os == 'Linux' && runner.arch == 'ARM64'
+        working-directory: jolt-net
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed 's/:arch :aarch64/:arch :x86-64/' \
+            tools/probed/linux-aarch64.edn > "$RUNNER_TEMP/linux-aarch64-normalized.edn"
+          diff -u tools/probed/linux-x86-64.edn \
+            "$RUNNER_TEMP/linux-aarch64-normalized.edn"
+
+      # The source table names Darwin/x86_64 explicitly and documents that it
+      # shares SDK facts with arm64. Validate that assertion with this runner's
+      # own executed probe. The aggregate tables job still reports the x86_64
+      # artifact as NEW until it is reviewed and committed; this comparison is
+      # an additional gate, not a silent replacement for that workflow.
+      - name: Verify macOS x86_64 ABI matches the explicit descriptor
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        working-directory: jolt-net
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed 's/:arch :x86-64/:arch :aarch64/' \
+            tools/probed/darwin-x86-64.edn > "$RUNNER_TEMP/darwin-x86-64-normalized.edn"
+          diff -u tools/probed/darwin-aarch64.edn \
+            "$RUNNER_TEMP/darwin-x86-64-normalized.edn"
 
       - name: Run the suite
         working-directory: jolt-net
@@ -254,5 +341,213 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: probed-suite-${{ matrix.os }}
+          name: probed-suite-${{ matrix.artifact }}
           path: jolt-net/tools/probed/*.edn
+
+  # This is deliberately not a Winsock runtime claim. It proves that a native
+  # Windows Jolt can resolve the immutable dependency graph, load the real
+  # production namespaces, validate the Win64 descriptor against the checked-in
+  # native probe, exercise pointer-backed pure address code, and observe the
+  # poller's explicit unsupported-target boundary. Real socket calls remain
+  # blocked on a Windows readiness backend.
+  windows-portable:
+    name: portable/ABI gate (Windows x86_64; no socket runtime)
+    runs-on: windows-2022
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSYS2 source-build toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          path-type: inherit
+          install: >-
+            git make mingw-w64-x86_64-gcc mingw-w64-x86_64-lz4
+            mingw-w64-x86_64-zlib
+
+      - name: Cache Chez Scheme
+        id: cache-chez-windows
+        uses: actions/cache@v4
+        with:
+          path: chez-install
+          key: chez-${{ runner.os }}-${{ runner.arch }}-v10.4.1-mingw64-v1
+
+      - name: Build official Chez Scheme v10.4.1 from source
+        if: steps.cache-chez-windows.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v10.4.1 \
+            https://github.com/cisco/ChezScheme.git "$RUNNER_TEMP/chez-src"
+          cd "$RUNNER_TEMP/chez-src"
+          ./configure --threads
+          make -j"$(nproc)"
+          inst="$GITHUB_WORKSPACE/chez-install"
+          mkdir -p "$inst/bin" "$inst/csv"
+          cp ta6nt/bin/ta6nt/*.exe "$inst/bin/"
+          cp ta6nt/bin/ta6nt/*.dll "$inst/bin/" 2>/dev/null || true
+          cp ta6nt/boot/ta6nt/petite.boot ta6nt/boot/ta6nt/scheme.boot "$inst/bin/"
+          cp ta6nt/boot/ta6nt/petite.boot ta6nt/boot/ta6nt/scheme.boot "$inst/csv/"
+          cp ta6nt/boot/ta6nt/scheme.h "$inst/csv/"
+          cp ta6nt/boot/ta6nt/libkernel.a "$inst/csv/"
+
+      - name: Provide and assert official Chez v10.4.1
+        run: |
+          set -euo pipefail
+          bindir="$GITHUB_WORKSPACE/chez-install/bin"
+          test -x "$bindir/scheme.exe"
+          { echo '#!/bin/sh'; echo "exec \"$bindir/scheme.exe\" \"\$@\""; } > "$bindir/chez"
+          { echo '#!/bin/sh'; echo 'exec gcc "$@"'; } > "$bindir/cc"
+          chmod +x "$bindir/chez" "$bindir/cc"
+          echo "$bindir" >> "$GITHUB_PATH"
+          echo "JOLT_CHEZ_CSV=$GITHUB_WORKSPACE/chez-install/csv" >> "$GITHUB_ENV"
+          "$bindir/chez" --version | tee "$RUNNER_TEMP/chez-version"
+          grep -Fq '10.4.1' "$RUNNER_TEMP/chez-version"
+
+      - name: Checkout the pinned Jolt fork
+        uses: actions/checkout@v4
+        with:
+          repository: casselc/jolt
+          ref: e749f154
+          submodules: recursive
+          path: jolt-upstream
+
+      - name: Run portable target and address checks
+        env:
+          JOLT_PWD: ${{ github.workspace }}
+          JOLT_SH: 'C:/Program Files/Git/bin/sh.exe'
+        run: |
+          "$GITHUB_WORKSPACE/jolt-upstream/bin/joltc" -A:test - <<'EOF'
+          (require '[jolt.net.check :as c]
+                   '[jolt.net.target-test :as target-test]
+                   '[jolt.net.address-test :as address-test]
+                   '[jolt.net :as net])
+          (c/check "portable gate is native Windows"
+                   :windows (:os (jolt.host/target)))
+          (target-test/run!)
+          (address-test/run!)
+          (c/check-throws "readiness fails closed without a Windows backend"
+                          {:jolt.net/kind :unsupported-target}
+                          #(net/open-poller))
+          (flush)
+          (System/exit (c/summary))
+          EOF
+
+  # Public-preview evidence lane. The runner image also contains an x86_64
+  # MinGW gcc that can execute under emulation; using it here would silently
+  # produce an x86_64 probe on an ARM64 host. Build Chez and the ABI probe with
+  # the native MSVC ARM64 target instead. The generated descriptor is uploaded
+  # for review and is deliberately not copied into the source table.
+  windows-arm64-source-preview:
+    name: source-mode ABI preview (Windows aarch64; non-AOT, no sockets)
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 35
+    continue-on-error: true
+    steps:
+      - name: Checkout jolt-net
+        uses: actions/checkout@v4
+
+      - name: Checkout official Chez Scheme v10.4.1
+        uses: actions/checkout@v4
+        with:
+          repository: cisco/ChezScheme
+          ref: v10.4.1
+          submodules: recursive
+          persist-credentials: false
+          path: chez-arm64
+
+      - name: Build native ARM64 Chez Scheme from source
+        shell: cmd
+        run: |
+          cd /d "%GITHUB_WORKSPACE%\chez-arm64"
+          call build.bat tarm64nt /only
+
+      - name: Compile and run the ABI probe with native ARM64 MSVC
+        shell: cmd
+        run: |
+          call "%GITHUB_WORKSPACE%\chez-arm64\c\vs.bat" x64_arm64
+          cl /nologo /W4 /O0 /Fe:"%GITHUB_WORKSPACE%\probe-windows-aarch64.exe" "%GITHUB_WORKSPACE%\tools\probe-constants.c"
+          "%GITHUB_WORKSPACE%\probe-windows-aarch64.exe" > "%GITHUB_WORKSPACE%\tools\probed\windows-aarch64.edn"
+          type "%GITHUB_WORKSPACE%\tools\probed\windows-aarch64.edn"
+          findstr /C:":arch :aarch64" "%GITHUB_WORKSPACE%\tools\probed\windows-aarch64.edn" >NUL
+
+      - name: Upload native Windows ARM64 ABI evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: probed-windows-aarch64-preview
+          path: tools/probed/windows-aarch64.edn
+          if-no-files-found: error
+
+      - name: Checkout the pinned Jolt fork
+        uses: actions/checkout@v4
+        with:
+          repository: casselc/jolt
+          ref: e749f154
+          submodules: recursive
+          path: jolt-upstream
+
+      - name: Provide native Chez for source-mode Jolt
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace="$(cygpath -u "$GITHUB_WORKSPACE")"
+          scheme="$workspace/chez-arm64/tarm64nt/bin/tarm64nt/scheme.exe"
+          bindir="$workspace/.ci-windows-arm64-bin"
+          test -f "$scheme"
+          mkdir -p "$bindir"
+          printf '#!/bin/sh\nexec "%s" "$@"\n' "$scheme" > "$bindir/chez"
+          chmod +x "$bindir/chez"
+          "$bindir/chez" --version | tee "$RUNNER_TEMP/chez-version"
+          grep -Fq '10.4.1' "$RUNNER_TEMP/chez-version"
+          cygpath -w "$bindir" >> "$GITHUB_PATH"
+          echo 'JOLT_SH=C:/Program Files/Git/bin/sh.exe' >> "$GITHUB_ENV"
+          echo 'JOLT_AOT_CACHE=0' >> "$GITHUB_ENV"
+
+      # No Windows/aarch64 descriptor is committed yet. Loading jolt.net.ffi
+      # before reviewing the uploaded probe would require guessed layouts, so
+      # this source-mode preview exercises the production target selector and
+      # requires the current unsupported target to fail closed.
+      - name: Verify native target and fail-closed descriptor selection
+        shell: bash
+        env:
+          JOLT_PWD: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          workspace="$(cygpath -u "$GITHUB_WORKSPACE")"
+          "$workspace/jolt-upstream/bin/joltc" - <<'EOF'
+          (require '[jolt.net.target :as target])
+          (let [observed (jolt.host/target)
+                probe (read-string
+                       (slurp
+                        (str (System/getenv "JOLT_PWD")
+                             "/tools/probed/windows-aarch64.edn")))
+                error (try
+                        (target/descriptor observed)
+                        nil
+                        (catch Throwable cause cause))]
+            (when-not (= :windows (:os observed))
+              (throw (ex-info "source Jolt did not report Windows"
+                              {:target observed})))
+            (when-not (= :aarch64 (:arch observed))
+              (throw (ex-info "source Jolt did not report aarch64"
+                              {:target observed})))
+            (when-not (= 64 (:pointer-bits observed))
+              (throw (ex-info "source Jolt did not report a 64-bit target"
+                              {:target observed})))
+            (when-not (= [:windows :aarch64 64]
+                         [(:os probe) (:arch probe) (:pointer-bits probe)])
+              (throw (ex-info "native probe target disagrees with source Jolt"
+                              {:target observed :probe probe})))
+            (when (target/supported-target? observed)
+              (throw (ex-info "Windows ARM64 descriptor appeared without reviewed probe evidence"
+                              {:target observed})))
+            (when-not (= :unsupported-target
+                         (:jolt.net/kind (ex-data error)))
+              (throw (ex-info "unreviewed Windows ARM64 descriptor did not fail closed"
+                              {:target observed :error error})))
+            (println "PASS source-mode Windows ARM64 target and fail-closed descriptor"))
+          EOF

@@ -24,6 +24,8 @@
 
 ;; a descriptor's declared handle width, for comparison with the probe
 (defn- handle-bytes [d] (if (= :uptr (:handle-type d)) 8 4))
+(defn- socklen-bytes [d]
+  (case (:socklen-type d) (:int :uint) 4 :size_t 8 nil))
 (defn- addrlen-bytes [d]
   (if (= :size_t (get-in d [:layout :addrinfo :addrlen-type])) 8 4))
 (defn- nfds-bytes [d]
@@ -69,6 +71,8 @@
                  (get-in probe [:layout :sin-len?]) (:sin-len? d))
         (c/check (str label ": socket handle width matches")
                  (:socket-handle-bytes probe) (handle-bytes d))
+        (c/check (str label ": socket address-length width matches")
+                 (:socklen-bytes probe) (socklen-bytes d))
         (c/check (str label ": nfds_t width matches")
                  (:nfds-bytes probe) (nfds-bytes d))
         (c/check (str label ": errno codes match") {} (diff-map (:errno probe) (:errno d)))
@@ -123,6 +127,9 @@
   ;; records which, and the comparison below runs as soon as the file exists.
   (c/check "macOS is now machine-probed"
            :probed (:evidence (t/descriptor {:os :darwin :arch :aarch64 :pointer-bits 64})))
+  (c/check "macOS x86-64 stays inferred until its native CI evidence is reviewed"
+           :inferred-from-darwin-aarch64
+           (:evidence (t/descriptor {:os :darwin :arch :x86-64 :pointer-bits 64})))
   (if (read-probe "darwin" "aarch64")
     (check-against-probe "darwin/aarch64" [:darwin :aarch64 64])
     (c/skip "darwin/aarch64 vs probed headers"

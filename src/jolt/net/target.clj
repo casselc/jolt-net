@@ -14,8 +14,9 @@
 
   Most values here were extracted from the platform's own headers by
   tools/probe-constants.sh; each descriptor records how it was verified under
-  :evidence, and jolt.net.target-test diffs the probed descriptors against
-  tools/probed/*.edn so drift is a test failure. See docs/PLATFORM-COVERAGE.md."
+  :evidence. CI diffs committed probes directly and separately gates explicit
+  same-ABI aliases against native Linux/aarch64 and Darwin/x86-64 probes. See
+  docs/PLATFORM-COVERAGE.md."
   (:require [clojure.string :as str]))
 
 ;; --- Linux ------------------------------------------------------------------
@@ -61,9 +62,10 @@
          :system -11 :addrfamily nil}})
 
 ;; --- Windows ----------------------------------------------------------------
-;; :evidence :probed -- tools/probed/windows-x86-64.edn, mingw headers, binary
-;; executed via WSL interop. The NUMBERS are real; no Winsock CALL has been made
-;; from jolt on Windows. See docs/PLATFORM-COVERAGE.md.
+;; :evidence :probed -- tools/probed/windows-x86-64.edn, checked against a probe
+;; compiled and executed on a native Windows runner. The NUMBERS are real; the
+;; native portable Jolt gate deliberately makes no Winsock CALL. See
+;; docs/PLATFORM-COVERAGE.md.
 (def ^:private windows-x86-64
   {:platform :windows
    :evidence :probed
@@ -116,8 +118,10 @@
 ;; :evidence :probed -- tools/probed/darwin-aarch64.edn, produced by compiling
 ;; and running tools/probe-constants.c on a macOS arm64 CI runner.
 ;;
-;; The aarch64 probe also backs the x86-64 entry: these constants and layouts are
-;; SDK facts rather than arch facts on macOS. Only aarch64 is machine-checked.
+;; The two entries share one table because these constants and layouts are SDK
+;; facts rather than architecture facts on macOS. CI still probes both native
+;; architectures independently: the x86-64 job uploads its distinct evidence
+;; and gates this alias by diffing every fact after normalizing only :arch.
 (def ^:private darwin
   {:platform :posix
    :evidence :probed
@@ -172,7 +176,9 @@
    [:linux :aarch64 64] (assoc linux-x86-64 :evidence :inferred-from-linux-x86-64)
    [:windows :x86-64 64] windows-x86-64
    [:darwin :aarch64 64] darwin
-   [:darwin :x86-64 64] darwin})
+   ;; Keep the public evidence label honest until the new native Intel jobs have
+   ;; run green and their probe artifact has been reviewed into the baseline.
+   [:darwin :x86-64 64] (assoc darwin :evidence :inferred-from-darwin-aarch64)})
 
 (defn supported-target?
   "Is `t` (a jolt.host/target-shaped map) a target jolt-net has facts for?"
