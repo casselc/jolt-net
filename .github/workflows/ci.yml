@@ -40,18 +40,28 @@ jobs:
           - name: Linux x86_64
             runner: ubuntu-24.04
             artifact: linux-x86-64
+            expected_os: linux
+            expected_arch: x86-64
           - name: Linux aarch64
             runner: ubuntu-24.04-arm
             artifact: linux-aarch64
+            expected_os: linux
+            expected_arch: aarch64
           - name: macOS arm64
             runner: macos-15
             artifact: darwin-aarch64
+            expected_os: darwin
+            expected_arch: aarch64
           - name: macOS x86_64
             runner: macos-15-intel
             artifact: darwin-x86-64
+            expected_os: darwin
+            expected_arch: x86-64
           - name: Windows x86_64
             runner: windows-2022
             artifact: windows-x86-64
+            expected_os: windows
+            expected_arch: x86-64
     steps:
       - uses: actions/checkout@v4
 
@@ -72,6 +82,14 @@ jobs:
           cat probe.edn
           os=$(sed -n 's/^{:os :\([a-z0-9-]*\).*/\1/p' probe.edn)
           arch=$(sed -n 's/^ :arch :\([a-z0-9-]*\).*/\1/p' probe.edn)
+          [ "$os" = "${{ matrix.expected_os }}" ] || {
+            echo "probe OS mismatch: expected ${{ matrix.expected_os }}, got $os"
+            exit 1
+          }
+          [ "$arch" = "${{ matrix.expected_arch }}" ] || {
+            echo "probe architecture mismatch: expected ${{ matrix.expected_arch }}, got $arch"
+            exit 1
+          }
           cp probe.edn "tools/probed/$os-$arch.edn"
           echo "PROBE_FILE=tools/probed/$os-$arch.edn" >> "$GITHUB_ENV"
 
@@ -168,13 +186,13 @@ jobs:
         with:
           path: jolt-net
 
-      # The fork carries the six primitives jolt-net is built on. Submodules
+      # The fork carries the seven primitives jolt-net is built on. Submodules
       # are required: the runtime will not load without vendor/irregex et al.
       - name: Checkout the jolt fork
         uses: actions/checkout@v4
         with:
           repository: casselc/jolt
-          ref: e749f154
+          ref: e749f154c44ea40c7333b19dccc796cb869ccbd6
           submodules: recursive
           path: jolt-upstream
 
@@ -327,6 +345,7 @@ jobs:
         working-directory: jolt-net
         env:
           JOLT_UPSTREAM: ${{ github.workspace }}/jolt-upstream
+          JOLT_HEGEL_REQUIRED: "1"
         run: ./bin/jnc -M:test
 
       # If the freshly probed facts differ from what is committed, surface the
@@ -412,7 +431,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: casselc/jolt
-          ref: e749f154
+          ref: e749f154c44ea40c7333b19dccc796cb869ccbd6
           submodules: recursive
           path: jolt-upstream
 
@@ -421,7 +440,7 @@ jobs:
           JOLT_PWD: ${{ github.workspace }}
           JOLT_SH: 'C:/Program Files/Git/bin/sh.exe'
         run: |
-          "$GITHUB_WORKSPACE/jolt-upstream/bin/joltc" -A:test - <<'EOF'
+          "$GITHUB_WORKSPACE/jolt-upstream/bin/joltc" -A:blocking-test - <<'EOF'
           (require '[jolt.net.check :as c]
                    '[jolt.net.target-test :as target-test]
                    '[jolt.net.address-test :as address-test]
@@ -486,7 +505,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: casselc/jolt
-          ref: e749f154
+          ref: e749f154c44ea40c7333b19dccc796cb869ccbd6
           submodules: recursive
           path: jolt-upstream
 
