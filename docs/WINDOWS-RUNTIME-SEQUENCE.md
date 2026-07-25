@@ -204,7 +204,8 @@ Stop after W1 and return the evidence. Do not begin W2.
 
 ## Task W2: Windows nonblocking transitions and byte I/O
 
-Branch from reviewed W1: `claude/windows-nonblocking-io`
+Branch `claude/windows-nonblocking-io` from reviewed W1
+`f0affc4fa80ac00313860789cc8b894564ecc3b1`.
 
 Implement and probe `ioctlsocket(FIONBIO)`, Windows nonblocking accept/connect,
 `recv`, `send`, and `getsockopt(SO_ERROR)`. Preserve the existing value contract
@@ -214,6 +215,42 @@ capture-before-cleanup tests. Every failure-sensitive native call must consume
 an explicit captured result; a separate post-call last-error read is not an
 acceptable Windows implementation. Extend the nonblocking-transition proof so
 the postcondition is platform-neutral. Do not add a poller in this task.
+
+Add a dependency-free Windows W2 test main and direct PowerShell runner rather
+than loading the POSIX poller suite or invoking a bash wrapper. From WSL, invoke
+native Windows only through:
+
+```bash
+/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe \
+  -NoProfile -ExecutionPolicy Bypass \
+  -File 'D:\src\jolt-org\jolt-net\tools\test-windows-nonblocking.ps1' \
+  -JoltNetPath 'D:\src\jolt-org\jolt-net' \
+  -RuntimePath 'D:\src\jolt-proposal-net-runtime' \
+  -ChezExe 'D:\chez-10.4.1\bin\scheme.exe' \
+  -TimeoutSeconds 90
+```
+
+The runner must set its native working directory and invoke
+`scheme.exe --script host\chez\cli.ss` directly. Sync the `D:` checkout with
+native Git for Windows, not PowerShell-to-bash indirection.
+
+Acceptance:
+
+- `ioctlsocket(FIONBIO)` is probed from Windows headers and its applied state is
+  verified before the handle is marked nonblocking;
+- accept/read before readiness return `would-block`, zero-length read alone
+  returns zero, and peer half-close returns EOF;
+- sliced send/receive preserve both array offsets and byte counts;
+- immediate and in-progress connect remain distinct, and `SO_ERROR` decides
+  completion rather than readiness;
+- refused completion preserves exact `10061` and leaves the returned socket
+  caller-owned until one explicit close;
+- all sentinel/error consumers use captured pairs, including the first use of
+  each binding;
+- the native dependency-free W2 gate and the complete Hegel-required Linux
+  suite pass under watchdogs; and
+- the proof/model trio, source anchors, platform evidence, branch commits, and
+  clean status are recorded.
 
 Stop after W2 and return the evidence.
 
