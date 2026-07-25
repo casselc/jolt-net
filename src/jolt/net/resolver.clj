@@ -48,6 +48,10 @@
   connection policies belong in a connector layer, not here."
   ([ep] (resolve ep {}))
   ([ep opts]
+   ;; getaddrinfo is itself a Winsock call on Windows -- it must never run
+   ;; before WSAStartup. socket-for's ensure-subsystem! call is too late here:
+   ;; listen/connect resolve the endpoint BEFORE they reach socket-for.
+   (nffi/ensure-subsystem!)
    (let [host (:jolt.net/host ep)
          port (:jolt.net/port ep)
          passive? (boolean (:passive? opts))

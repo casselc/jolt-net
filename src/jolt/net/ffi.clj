@@ -131,28 +131,77 @@
 ;; The outcome is memoized either way, so a failure is not retried on every
 ;; socket -- jolt.mvn-http re-runs its init on each attempt, which is the bug
 ;; this avoids.
+;;
+;; A check-then-reset atom (read @subsystem, maybe CAS a result in) is NOT a
+;; once-only protocol: two threads can both observe nil before either writes,
+;; and both then call WSAStartup. `subsystem` instead holds one of three kinds
+;; of value: nil (untried), a promise (one attempt in flight), or a resolved
+;; outcome (:ok or {:error ex}, permanently memoized). Exactly one caller wins
+;; the nil->promise CAS and performs the single WSAStartup call; every other
+;; caller -- concurrent or arriving later -- blocks on or reads that same
+;; promise/outcome instead of attempting its own.
 (def ^:private subsystem (atom nil))
 
+;; Diagnostic only -- not consulted by ensure-subsystem! itself. Lets a
+;; concurrent first-use stress test prove exactly one WSAStartup call was
+;; made, rather than trusting the memoized-value assertion alone.
+(def ^:private startup-attempts (atom 0))
+
+(defn winsock-startup-attempts
+  "How many times this process has actually called WSAStartup. Diagnostic
+  only, for the once-only stress test; always 0 on POSIX."
+  []
+  @startup-attempts)
+
+(defn- attempt-wsa-startup!
+  "The single WSAStartup call a winning caller performs. Returns :ok or
+  {:error ex}; never throws, so the winner can deliver the outcome to every
+  waiter before resolving its own return/throw."
+  []
+  (swap! startup-attempts inc)
+  (let [buf (ffi/alloc 512)]                       ; WSADATA
+    (try
+      ;; WSAStartup RETURNS its error code; it does not set the last-error
+      ;; slot, so WSAGetLastError must not be consulted here.
+      (let [rc (w-wsastartup 0x0202 buf)]           ; request 2.2
+        (if (zero? rc)
+          :ok
+          {:error (ex-info "jolt.net: WSAStartup failed"
+                           {:jolt.net/kind :unknown
+                            :jolt.net/op :wsa-startup
+                            :jolt.net/code rc
+                            :jolt.net/platform :windows})}))
+      (finally (ffi/free buf)))))
+
+(defn- resolve-subsystem-outcome
+  "true for :ok; throws the SAME memoized exception object for {:error ex}, so
+  every caller -- including ones long after the original attempt -- sees an
+  identical failure rather than a fresh, differently-timestamped one."
+  [outcome]
+  (if (= :ok outcome)
+    true
+    (throw (:error outcome))))
+
 (defn ensure-subsystem!
-  "Initialize Winsock once. A no-op on POSIX. Returns true when usable."
+  "Initialize Winsock exactly once, even under concurrent first callers. A
+  no-op on POSIX. Returns true when usable; throws the memoized failure on
+  every call after a failed attempt."
   []
   (if-not windows?
     true
-    (let [s @subsystem]
-      (if (some? s)
-        s
-        (let [buf (ffi/alloc 512)]                 ; WSADATA
-          (try
-            ;; WSAStartup RETURNS its error code; it does not set the last-error
-            ;; slot, so WSAGetLastError must not be consulted here.
-            (let [rc (w-wsastartup 0x0202 buf)     ; request 2.2
-                  ok (zero? rc)]
-              (reset! subsystem ok)
-              (when-not ok
-                (throw (ex-info "jolt.net: WSAStartup failed"
-                                {:jolt.net/kind :unknown
-                                 :jolt.net/op :wsa-startup
-                                 :jolt.net/code rc
-                                 :jolt.net/platform :windows})))
-              ok)
-            (finally (ffi/free buf))))))))
+    (loop []
+      (let [s @subsystem]
+        (cond
+          (= :ok s) (resolve-subsystem-outcome s)
+          (map? s) (resolve-subsystem-outcome s)
+          ;; a pending promise from the in-flight winner: wait for its result
+          ;; rather than attempting a second WSAStartup
+          (some? s) (resolve-subsystem-outcome (deref s))
+          :else
+          (let [p (promise)]
+            (if (compare-and-set! subsystem nil p)
+              (let [outcome (attempt-wsa-startup!)]
+                (deliver p outcome)
+                (reset! subsystem outcome)
+                (resolve-subsystem-outcome outcome))
+              (recur))))))))

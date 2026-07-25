@@ -23,6 +23,62 @@ results, unsat cores, bounds, and omitted behavior.
 
 ---
 
+## 0. Winsock subsystem initialization is ordered and once-only
+
+**Property.** Every Winsock operation, including `getaddrinfo`, runs only
+after `WSAStartup` has succeeded. Concurrent first callers perform exactly one
+`WSAStartup` attempt, and every caller -- racing or arriving later -- observes
+the same memoized success or the same memoized failure.
+
+**Why it needs a proof.** `getaddrinfo` is itself a Winsock call on Windows,
+not a POSIX-portable resolver primitive that happens to also exist there. The
+live witness that motivated this task was `jolt.net resolve: Name resolution
+failed (code 10093)` -- `WSANOTINITIALISED` -- because `jolt.net/listen` and
+`jolt.net/connect` resolve the endpoint before reaching `socket-for`, which was
+the only call site invoking `ensure-subsystem!`. Separately, the original
+`ensure-subsystem!` was `(let [s @subsystem] (if (some? s) s (do (wsastartup)
+(reset! subsystem ...))))` -- a check-then-reset atom, not a once-only
+protocol: two threads can both observe "untried" before either writes, so both
+call `WSAStartup`, and each can return its own call's result even when they
+disagree.
+
+**Design.** `jolt.net.resolver/resolve` calls `jolt.net.ffi/ensure-subsystem!`
+before `getaddrinfo`, not only through `socket-for`, so resolution can never
+race initialization on any call path. `ensure-subsystem!` itself holds one of
+three states in a single atom: untried (`nil`), one attempt in flight (a
+`promise`), or a resolved outcome (`:ok` or `{:error ex}`, permanently
+memoized). Exactly one caller wins the `nil -> promise` `compare-and-set!` and
+performs the single `WSAStartup` call; every other caller blocks on
+`(deref promise)` or reads the already-resolved outcome, so it never attempts
+its own call and always returns exactly what the winner delivered. `WSAStartup`
+is process-scoped and individual sockets never call `WSACleanup`, so tearing
+down the subsystem under other users is not possible from this code.
+
+**Result.**
+
+- `winsock-init-once-buggy.smt2` -- **sat**. Counterexample: both callers
+  observe "untried", `attempt_count = 2`, and their own outcomes disagree.
+- `winsock-init-once-corrected.smt2` -- **unsat**, with core `{cas_atomicity,
+  someone_attempts, t1_reads_winner, t2_reads_winner, property_violated}`. The
+  core shows agreement follows structurally from the loser deferring to the
+  winner's delivered value, not from assuming the two `WSAStartup` calls would
+  have agreed.
+- `winsock-init-once-nonvacuity.smt2` -- **sat**. Witness has one real CAS
+  winner under genuine contention, `attempt_count = 1`, and both callers'
+  outcomes equal.
+
+The runtime counterpart is `test/jolt/net/blocking_test_main.clj`'s
+`winsock-init-stress!`: it runs 32 concurrent futures through
+`ensure-subsystem!` as the process's actual first use -- deliberately before
+any other namespace's `resolve`/`listen`/`connect` call -- and asserts
+`jolt.net.ffi/winsock-startup-attempts` is exactly 1 afterward, then confirms a
+later caller reuses the memoized outcome without incrementing that counter.
+The 10093 witness disappearing is proved by the resolver and socket suites
+that run immediately afterward in the same process succeeding at all, not by
+a test that bypasses resolution.
+
+---
+
 ## 1. Capture precedes cleanup
 
 **Property.** The native error a caller reports is the error of the operation

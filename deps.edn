@@ -31,7 +31,14 @@
                                 :git/sha "4910faed4dc86ee54c6afc1a99dcb9a5bca6e840"}}
                   :main-opts ["-m" "jolt.net.test-main"]}
            :sigpipe {:extra-paths ["test"]
-                     :main-opts ["-m" "jolt.net.sigpipe-child"]}}
+                     :main-opts ["-m" "jolt.net.sigpipe-child"]}
+           ;; No :extra-deps at all -- unlike :test, this alias must not
+           ;; resolve jolt-hegel (or anything else) before running. Target,
+           ;; address, resolver, and blocking-socket coverage only: no poller,
+           ;; no POSIX nonblocking calls, no SIGPIPE child. See
+           ;; docs/WINDOWS-RUNTIME-SEQUENCE.md task W1.
+           :blocking-test {:extra-paths ["test"]
+                           :main-opts ["-m" "jolt.net.blocking-test-main"]}}
 
  ;; Deliberately NOT `joltc -M:test`: a bare `joltc` resolves to the stock
  ;; v0.4.15 on PATH, which cannot load this library at all.
