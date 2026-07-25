@@ -91,22 +91,33 @@ that bypasses resolution.
 
 ---
 
-## 1. Capture precedes cleanup
+## 1. Native result and error stay paired through cleanup
 
 **Property.** The native error a caller reports is the error of the operation
-that *failed*, not of the cleanup that ran while unwinding.
+that *failed*, not of runtime reactivation or cleanup that ran afterward.
 
-**Why it needs a proof.** `errno` is a single per-thread slot that is valid only
-until the next native call — and `close()`, `free()`, and `closesocket()` are all
-native calls. So any rollback performed before the read destroys the evidence.
+**Why it needs a proof.** `errno`/Windows last-error is a per-thread slot that is
+valid only until intervening runtime or native work. A collect-safe foreign call
+may reactivate the Scheme runtime before source code can call an error accessor;
+`close()`, `free()`, and `closesocket()` can then overwrite it again during
+rollback. So lexical adjacency in Scheme is insufficient for a blocking call.
 This is not hypothetical: `teensyp.ffi-net`'s constructors call `close` before
 reading `errno`, so a failed `bind` can report whatever `close` happened to set.
-An example-based test cannot rule this out in general, because whether the
-clobber is *visible* depends on which two codes collide.
+The first Windows W1 probe found the stronger form: blocking `connect` returned
+failure, yet a later `WSAGetLastError` observed zero.
 
-**Design.** `jolt.net.error/checked` reads the error lexically immediately after
-the failing call, with nothing interposed, and callers put rollback in a `catch`
-— which by construction runs later.
+**Design.** Failure-sensitive blocking bindings opt into core
+`{:capture-native-error true}` and live only in
+`jolt.net.ffi/captured-call`; `invoke-captured` always returns
+`[native-result native-error]`. The scalar `call`/`invoke` surface has a
+different, invariant result shape. `checked-captured` consumes only the pair
+and ignores stale error state on success. Blocking `accept`, `connect`,
+`recv`, `send`, `poll`, and `getaddrinfo` use the captured table; POSIX
+`getaddrinfo` consults the second element only for `EAI_SYSTEM`.
+
+Ordinary nonblocking calls may still use `checked`/`capture`, whose lexical
+capture precedes rollback cleanup. They never stand in for the collect-safe
+foreign-return boundary.
 
 **Result.**
 
@@ -120,9 +131,13 @@ the failing call, with nothing interposed, and callers put rollback in a `catch`
   `errno_after_cleanup=2 ≠ errno_after_fail=1` and `reported=1`: a real clobber
   occurred, and the failure's own code was still reported.
 
-The runtime counterpart is in `jolt.net.socket-test`: a double bind must report
-`EADDRINUSE` against `:bind`, not a cleanup error. The proof covers the
-interleavings; the test covers that the code is actually wired that way.
+These models abstract the capture boundary as an ordering fact; they do not
+prove Chez's `__errno`/`__get_last_error` convention. The core FFI tests and
+`docs/ffi-native-error-capture.md` establish that source oracle. jolt-net adds
+deterministic controls for paired success/failure, `poll`, and POSIX
+`EAI_SYSTEM`; the real socket suite requires double bind to report
+`EADDRINUSE` and native Windows refused connect to report `10061`, both after
+their rollback paths.
 
 ---
 
@@ -336,7 +351,7 @@ neighboring callback.
 
 ---
 
-## 4. Non-blocking connect ownership survives completion
+## 4. Non-blocking connect ownership survives native connection completion
 
 **Bounded claim.** For one initiation and at most one completion:
 
@@ -384,6 +399,10 @@ The finite model has one socket, one completion, one closer, five distinct event
 positions, and atomic atom/lease transitions. It omits repeated completion
 polls, multiple close callers, kernel `SO_ERROR` behavior, resolver scheduling,
 and weak memory below atom linearizability.
+
+Here “completion” means `finish-connect!` checking `SO_ERROR`; it is unrelated
+to the future-shaped operation/lease completion abstraction proposed for
+jolt-tcp.
 
 The executable companion in `jolt.net.poller-test` pins immediate and
 in-progress classification, completes a real loopback connect only after

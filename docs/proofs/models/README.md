@@ -32,9 +32,9 @@ Three more files were added on 2026-07-24 for task W1
 
 | Model | Expected | Essential witness or unsat core |
 |---|---:|---|
-| `errno-capture-ordering-buggy.smt2` | `sat` | failure `1`, cleanup `2`, reported `2` |
-| `errno-capture-ordering-corrected.smt2` | `unsat` | `failing_call_sets_errno`, `capture_before_cleanup`, `property_violated` |
-| `errno-capture-ordering-nonvacuity.smt2` | `sat` | failure `1`, cleanup `2`, reported `1` |
+| `errno-capture-ordering-buggy.smt2` | `sat` | failure is positive, runtime reactivation leaves `0`, late capture reports `0` |
+| `errno-capture-ordering-corrected.smt2` | `unsat` | `failing_call_sets_errno`, `capture_in_foreign_return`, `reported_from_pair`, `property_violated` |
+| `errno-capture-ordering-nonvacuity.smt2` | `sat` | failure `1`, runtime reactivation `0`, captured pair still reports `1` |
 | `idempotent-close-buggy.smt2` | `sat` | both callers win; `close_count = 2` |
 | `idempotent-close-corrected.smt2` | `unsat` | `cas_atomicity`, `someone_closes`, `property_violated` |
 | `idempotent-close-nonvacuity.smt2` | `sat` | contention with exactly one CAS winner |
@@ -67,7 +67,8 @@ The full unsat cores observed in that run were:
 
 ```text
 errno corrected:
-  failing_call_sets_errno capture_before_cleanup property_violated
+  failing_call_sets_errno capture_in_foreign_return reported_from_pair
+  property_violated
 
 idempotent close corrected:
   cas_atomicity someone_closes property_violated
@@ -141,6 +142,14 @@ winsock init once corrected:
 The models deliberately stay small; the implementation and forced
 interleaving tests supply the semantic oracle:
 
+- `jolt.net.ffi/captured-call` contains every failure-sensitive blocking
+  binding, and `invoke-captured` has the single result shape
+  `[native-result native-error]`. `jolt.net.error/checked-captured`,
+  `jolt.net.poller/poll-once`, and `jolt.net.resolver/resolve` consume that pair
+  without a later error-slot read. The errno-ordering models treat this foreign
+  return as their `capture` event; Chez convention correctness is established
+  by the core fork's `docs/ffi-native-error-capture.md` and native controls, not
+  by these bounded models.
 - `jolt.net.handle/acquire!`, `release!`, and `close!` implement the
   open/admit, drain, and native-close transitions used by the lease models.
 - `jolt.net.poller/await-ready` compares the complete captured registration
