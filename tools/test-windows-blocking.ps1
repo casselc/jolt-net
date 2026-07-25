@@ -66,6 +66,10 @@ try {
     -ArgumentList @("--script", "host\chez\cli.ss", "-M:blocking-test") `
     -NoNewWindow `
     -PassThru
+  # Touching .Handle forces the Process object to cache the native handle.
+  # Without it, PowerShell 5.1 leaves .ExitCode EMPTY even after a successful
+  # WaitForExit, so `exit $exitCode` exits 0 and a FAILING suite reports green.
+  $null = $process.Handle
   if ($process.WaitForExit($TimeoutSeconds * 1000)) {
     $exitCode = $process.ExitCode
   }
@@ -87,6 +91,13 @@ try {
 }
 finally {
   Pop-Location
+}
+
+if ($null -eq $exitCode) {
+  [Console]::Error.WriteLine(
+    "$(Split-Path -Leaf $PSCommandPath): no exit code was observed; refusing to report success"
+  )
+  exit 125
 }
 
 exit $exitCode

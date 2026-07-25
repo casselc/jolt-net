@@ -351,20 +351,40 @@
   ;; A rejected option fails AFTER socket() but BEFORE ownership transfers.
   ;; Repeating it catches any initiation path that throws without rolling the
   ;; raw descriptor back.
-  (let [before-socket (net/listen (net/endpoint "127.0.0.1" 0))
-        before (net/native-handle before-socket)]
-    (net/close! before-socket)
-    (dotimes [_ 50]
+  (let [attempts 50
+        before-socket (net/listen (net/endpoint "127.0.0.1" 0))
+        before (net/native-handle before-socket)
+        _ (net/close! before-socket)
+        threw (atom 0)]
+    (dotimes [_ attempts]
       (try
         (net/try-connect (net/endpoint "127.0.0.1" 1) {:recv-buffer-size 0})
-        (catch :default _ nil)))
+        (catch :default _ (swap! threw inc))))
+    ;; Deterministic on every platform, and a precondition for the numeric
+    ;; check below: an attempt that did NOT throw never took the rollback path,
+    ;; so the handle comparison would be measuring nothing.
+    (c/check "every rejected initiation failed before ownership transferred"
+             attempts @threw)
     (let [after-socket (net/listen (net/endpoint "127.0.0.1" 0))
-          after (net/native-handle after-socket)]
+          after (net/native-handle after-socket)
+          delta (abs (- after before))
+          ;; POSIX allocates the lowest free fd, so a leak shows up almost
+          ;; immediately and the allowance can be tight.
+          ;;
+          ;; Windows does NOT densely reuse handle values the way POSIX reuses
+          ;; fds: kernel handle values advance in steps of 4 and wander with
+          ;; unrelated activity in the process, so a tight threshold there is
+          ;; flaky rather than strict. The separation is still wide -- 50 leaked
+          ;; sockets would advance the space by roughly 4 * 50, while ambient
+          ;; runtime churn is tens -- so the allowance is scaled to the loop
+          ;; instead of being borrowed from the POSIX fd model.
+          allowance (if (windows?) (* 2 attempts) 10)]
       (try
         (c/check-pred
-          (str "50 failed initiations leak no descriptors (before " before
-               ", after " after ")")
-          #(< % 10) (abs (- after before)))
+          (str attempts " failed initiations leak no descriptors (before "
+               before ", after " after ", delta " delta ", allowance "
+               allowance ")")
+          #(< % allowance) delta)
         (finally (net/close! after-socket))))))
 
 ;; --- entry point -------------------------------------------------------------
