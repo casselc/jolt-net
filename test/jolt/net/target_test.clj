@@ -126,22 +126,17 @@
 
   (c/section "target: descriptors vs probed platform headers")
   (check-against-probe "linux/x86-64" [:linux :x86-64 64])
+  (check-against-probe "linux/aarch64" [:linux :aarch64 64])
   (check-against-probe "windows/x86-64" [:windows :x86-64 64])
+  (check-against-probe "darwin/aarch64" [:darwin :aarch64 64])
+  (check-against-probe "darwin/x86-64" [:darwin :x86-64 64])
 
-  ;; Make the macOS gap explicit rather than silent. If someone probes a Mac and
-  ;; commits the file, this flips from SKIP to a real comparison automatically.
   (c/section "target: coverage honesty")
-  ;; macOS was documentation-derived until a CI runner probed it; the descriptor
-  ;; records which, and the comparison below runs as soon as the file exists.
   (c/check "macOS is now machine-probed"
            :probed (:evidence (t/descriptor {:os :darwin :arch :aarch64 :pointer-bits 64})))
-  (c/check "macOS x86-64 stays inferred until its native CI evidence is reviewed"
-           :inferred-from-darwin-aarch64
+  (c/check "macOS x86-64 has independent native probe evidence"
+           :probed
            (:evidence (t/descriptor {:os :darwin :arch :x86-64 :pointer-bits 64})))
-  (if (read-probe "darwin" "aarch64")
-    (check-against-probe "darwin/aarch64" [:darwin :aarch64 64])
-    (c/skip "darwin/aarch64 vs probed headers"
-            "tools/probed/darwin-aarch64.edn missing; run CI or probe on a Mac"))
-  (c/check "linux/aarch64 records that it is inferred, not probed"
-           :inferred-from-linux-x86-64
+  (c/check "Linux aarch64 has independent native probe evidence"
+           :probed
            (:evidence (t/descriptor {:os :linux :arch :aarch64 :pointer-bits 64}))))

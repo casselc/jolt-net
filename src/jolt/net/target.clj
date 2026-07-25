@@ -187,15 +187,15 @@
 (def ^:private descriptors
   {[:linux :x86-64 64] linux-x86-64
    ;; Linux/aarch64 shares these facts with x86-64: same kernel UAPI (the
-   ;; constants come from asm-generic) and the same LP64 layout. Listed
-   ;; explicitly, with that reasoning, rather than reached by an :os fallback --
-   ;; the point of failing closed is that no target is matched by accident.
-   [:linux :aarch64 64] (assoc linux-x86-64 :evidence :inferred-from-linux-x86-64)
+   ;; constants come from asm-generic) and the same LP64 layout. A distinct
+   ;; native artifact now verifies that equality; the explicit tuple still
+   ;; prevents an accidental :os-only fallback.
+   [:linux :aarch64 64] (assoc linux-x86-64 :evidence :probed)
    [:windows :x86-64 64] windows-x86-64
    [:darwin :aarch64 64] darwin
-   ;; Keep the public evidence label honest until the new native Intel jobs have
-   ;; run green and their probe artifact has been reviewed into the baseline.
-   [:darwin :x86-64 64] (assoc darwin :evidence :inferred-from-darwin-aarch64)})
+   ;; A distinct native Intel artifact verifies the shared SDK table rather than
+   ;; asking the arm64 result to stand in as evidence.
+   [:darwin :x86-64 64] (assoc darwin :evidence :probed)})
 
 (defn supported-target?
   "Is `t` (a jolt.host/target-shaped map) a target jolt-net has facts for?"

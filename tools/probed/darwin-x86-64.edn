@@ -1,5 +1,5 @@
 {:os :darwin
- :arch :aarch64
+ :arch :x86-64
  :pointer-bits 64
  :socket-handle-bytes 4
  :socklen-bytes 4
