@@ -535,12 +535,20 @@
 ;; --- the W4 boundary, asserted as refusals ----------------------------------
 
 (defn- fail-closed-suite! []
-  (c/section "wsapoll: the wake and close lifecycle remains W4's, and refuses")
-  (c/check "this backend reports no wake transport" nil (r/wake-transport))
-  (c/check-throws
-   "the PUBLIC Windows poller is still fail-closed"
-   {:jolt.net/kind :unsupported-target}
-   #(net/open-poller))
+  (c/section "wsapoll: a poller built WITHOUT a wake transport still refuses")
+  ;; These two were W3's fail-closed boundaries, and task W4 moved both. They are
+  ;; updated in place rather than deleted: the target now HAS a wake transport,
+  ;; and the public Windows poller is no longer refused. What has NOT changed --
+  ;; and what this suite still exists to carry -- is that a poller constructed
+  ;; without a waker refuses every wake-dependent contract rather than quietly
+  ;; degrading it. The internal adapter exercised below is exactly such a poller,
+  ;; so the wake-less evidence survives the promotion intact.
+  (c/check "this target now reports a wake transport beneath the backend"
+           :windows-datagram (r/wake-transport))
+  (c/check "the public Windows poller now carries one"
+           true
+           (let [p (net/open-poller)]
+             (try (poller/wake-transport? p) (finally (net/close! p)))))
   (with-adapter!
     (fn [p]
       (c/check "the adapter knows it has no wake transport"
@@ -634,20 +642,30 @@
         (poller/close! p))))
 
   (c/section "wsapoll: W2 contracts are preserved, not resurrected")
-  ;; WSAPoll must not become a blocking-mode getter. The W2 boundary stands.
+  ;; WSAPoll must not become a blocking-mode getter. That W2 boundary stands.
+  ;;
+  ;; W2's OTHER Windows boundary -- the mixed-mode refusal of blocking accept
+  ;; after a listener transition -- does not, and this is its in-place
+  ;; successor rather than a deletion. That refusal existed for exactly one
+  ;; reason: native blocking accept could not be interrupted, so mixing it with
+  ;; a non-blocking listener was unsound. Task W4 removed the native blocking
+  ;; accept from Windows entirely, so the sound behavior is now to SUCCEED, and
+  ;; asserting the old throw would be asserting a bug.
   (with-listener!
     (fn [l]
       (c/check "accept before any client is still ::would-block"
                net/would-block (net/try-accept l))
       (c/check "try-accept marked the listener non-blocking"
                true (h/nonblocking? l))
-      (c/check-throws
-       "blocking accept after the transition is still explicitly rejected"
-       {:jolt.net/op :accept
-        :jolt.net/kind :invalid
-        :jolt.net/state :nonblocking
-        :jolt.net/requires :windows-readiness}
-       #(net/accept l))))
+      (let [port (:jolt.net/port (net/local-endpoint l))
+            attempt (net/try-connect (net/endpoint "127.0.0.1" port))
+            client (:jolt.net/socket attempt)
+            accepted (net/accept l)]
+        (try
+          (c/check-pred
+           "blocking accept now succeeds after a prior try-accept"
+           h/handle? accepted)
+          (finally (net/close! accepted) (net/close! client))))))
   (c/check "readiness did not invent a nonblocking-mode getter"
            :call-status (nb/postcondition-kind))
   (c/check "a success still ignores stale native-error state"

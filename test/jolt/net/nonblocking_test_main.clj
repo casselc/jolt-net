@@ -187,14 +187,24 @@
                true (h/nonblocking? l))
       (c/check-pred "would-block is the tagged value, not -1 or an exception"
                     net/would-block? (net/try-accept l))
+      ;; W2 asserted a Windows-only REFUSAL here: blocking accept after a
+      ;; listener transition threw, because native blocking accept could not be
+      ;; interrupted and mixing the two modes was unsound. Task W4 replaced
+      ;; Windows blocking accept with the readiness-driven short-lease path, so
+      ;; the mode transition is no longer a hazard and mixing is sound on every
+      ;; supported target. This is that assertion's in-place successor -- the
+      ;; behavior it describes changed, so it now checks the correct outcome
+      ;; rather than a refusal that would today be a bug.
       (when (windows?)
-        (c/check-throws
-          "blocking accept fails explicitly after a Windows listener transition"
-          {:jolt.net/op :accept
-           :jolt.net/kind :invalid
-           :jolt.net/state :nonblocking
-           :jolt.net/requires :windows-readiness}
-          #(net/accept l)))))
+        (let [port (:jolt.net/port (net/local-endpoint l))
+              attempt (net/try-connect (net/endpoint "127.0.0.1" port))
+              client (:jolt.net/socket attempt)
+              accepted (net/accept l)]
+          (try
+            (c/check-pred
+             "blocking accept succeeds after a Windows listener transition"
+             h/handle? accepted)
+            (finally (net/close! accepted) (net/close! client)))))))
   (with-pair!
     (fn [client server _]
       (net/finish-connect! client)
@@ -392,10 +402,10 @@
           allowance (if (windows?) (* 2 attempts) 10)]
       (try
         (c/check-pred
-          (str attempts " failed initiations leak no descriptors (before "
-               before ", after " after ", delta " delta ", allowance "
-               allowance ")")
-          #(< % allowance) delta)
+         (str attempts " failed initiations leak no descriptors (before "
+              before ", after " after ", delta " delta ", allowance "
+              allowance ")")
+         #(< % allowance) delta)
         (finally (net/close! after-socket))))))
 
 ;; --- entry point -------------------------------------------------------------
