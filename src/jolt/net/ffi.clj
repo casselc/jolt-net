@@ -154,15 +154,15 @@
   @startup-attempts)
 
 (defn- attempt-wsa-startup!
-  "The single WSAStartup call a winning caller performs. Returns :ok or
-  {:error ex}; never throws, so the winner can deliver the outcome to every
-  waiter before resolving its own return/throw."
+  "The single WSAStartup call a winning caller performs. Native WSAStartup
+  failure is returned as {:error ex}; an exceptional FFI/allocation failure is
+  normalized by ensure-once! so it cannot strand the in-flight promise."
   []
-  (swap! startup-attempts inc)
   (let [buf (ffi/alloc 512)]                       ; WSADATA
     (try
       ;; WSAStartup RETURNS its error code; it does not set the last-error
       ;; slot, so WSAGetLastError must not be consulted here.
+      (swap! startup-attempts inc)
       (let [rc (w-wsastartup 0x0202 buf)]           ; request 2.2
         (if (zero? rc)
           :ok
@@ -182,6 +182,41 @@
     true
     (throw (:error outcome))))
 
+(defn ensure-once!
+  "Internal, testable once-only state machine.
+
+  `state` contains nil, an in-flight promise, or a terminal :ok/{:error ex}
+  outcome. `attempt` is invoked exactly once by the nil->promise CAS winner.
+  Both returned failures and thrown exceptions become the same terminal error
+  outcome. Terminal state is published and the promise is delivered before the
+  winning public call returns or throws, so a failed attempt cannot strand
+  current or future waiters.
+
+  This lives in the private support namespace rather than the public jolt.net
+  API so deterministic controls can exercise success, returned-error, and
+  thrown-exception paths without resetting process-global Winsock state."
+  [state attempt]
+  (loop []
+    (let [s @state]
+      (cond
+        (= :ok s) (resolve-subsystem-outcome s)
+        (map? s) (resolve-subsystem-outcome s)
+        ;; a pending promise from the in-flight winner: wait for its result
+        ;; rather than attempting a second initialization
+        (some? s) (resolve-subsystem-outcome (deref s))
+        :else
+        (let [p (promise)]
+          (if (compare-and-set! state nil p)
+            (let [outcome (try
+                            (attempt)
+                            (catch :default e {:error e}))]
+              ;; Publish terminal state before waking a waiter. Both transitions
+              ;; precede the winner's own return/throw below.
+              (reset! state outcome)
+              (deliver p outcome)
+              (resolve-subsystem-outcome outcome))
+            (recur)))))))
+
 (defn ensure-subsystem!
   "Initialize Winsock exactly once, even under concurrent first callers. A
   no-op on POSIX. Returns true when usable; throws the memoized failure on
@@ -189,19 +224,4 @@
   []
   (if-not windows?
     true
-    (loop []
-      (let [s @subsystem]
-        (cond
-          (= :ok s) (resolve-subsystem-outcome s)
-          (map? s) (resolve-subsystem-outcome s)
-          ;; a pending promise from the in-flight winner: wait for its result
-          ;; rather than attempting a second WSAStartup
-          (some? s) (resolve-subsystem-outcome (deref s))
-          :else
-          (let [p (promise)]
-            (if (compare-and-set! subsystem nil p)
-              (let [outcome (attempt-wsa-startup!)]
-                (deliver p outcome)
-                (reset! subsystem outcome)
-                (resolve-subsystem-outcome outcome))
-              (recur))))))))
+    (ensure-once! subsystem attempt-wsa-startup!)))
