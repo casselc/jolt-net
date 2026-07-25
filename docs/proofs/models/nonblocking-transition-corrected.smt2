@@ -1,23 +1,40 @@
-; Claim: on Apple arm64 the fcntl binding declares its two-fixed-argument
-; variadic boundary, and no supposedly short non-blocking operation is admitted
-; unless a post-F_SETFL F_GETFL observes O_NONBLOCK.
+; Claim: on EVERY supported target, no descriptor is admitted to a supposedly
+; short non-blocking lease unless that target's own postcondition evidence says
+; the descriptor really left blocking mode -- and, where the transition goes
+; through a variadic C function, unless its ABI boundary is declared.
 ;
-; Bounded domain: one transition, one handle mark, and one operation admission.
-; The model intentionally does not assume that a successful F_SETFL implies the
-; bit is present: nonblocking_observed remains free. That makes the read-back a
-; fail-closed guard even for a future toolchain, libc, or binding regression.
+; This is the platform-neutral form of the postcondition. The two targets do
+; not establish it the same way, and the model says so rather than assuming a
+; POSIX read-back exists everywhere:
 ;
-; Expected: unsat. The asserted violation is either an ABI declaration mismatch
-; on the distinguishing target or a short operation admitted without the bit.
+;   POSIX   -- fcntl(F_SETFL), then F_GETFL re-reads O_NONBLOCK in process.
+;   Windows -- ioctlsocket(FIONBIO). Winsock exposes NO portable getter for a
+;              socket's blocking mode, so there is nothing to read back. The
+;              evidence is behavioral: a real accept/recv returning would-block
+;              instead of parking the thread is direct proof the descriptor is
+;              non-blocking.
+;
+; Bounded domain: one transition, one handle mark, one short-operation
+; admission. nonblocking_observed stays FREE -- the model never assumes a
+; successful native return implies the mode changed. That is what makes the
+; postcondition a fail-closed guard rather than a restatement of the return
+; code, on either platform.
+;
+; Expected: unsat. The asserted violation is either an undeclared variadic ABI
+; boundary on the distinguishing POSIX target, or a short operation admitted on
+; a descriptor that never actually left blocking mode.
 
 (set-option :produce-unsat-cores true)
 
+(declare-const windows Bool)
 (declare-const apple_arm64 Bool)
 (declare-const c_function_is_variadic Bool)
 (declare-const varargs_boundary_declared Bool)
-(declare-const setfl_returned_success Bool)
+(declare-const transition_returned_success Bool)
 (declare-const nonblocking_observed Bool)
-(declare-const postcondition_checked Bool)
+(declare-const flag_readback_performed Bool)
+(declare-const would_block_evidence Bool)
+(declare-const postcondition_established Bool)
 (declare-const handle_marked_nonblocking Bool)
 (declare-const short_operation_admitted Bool)
 (declare-const native_call_can_block Bool)
@@ -25,30 +42,47 @@
 (declare-const lease_violation Bool)
 (declare-const violation Bool)
 
-(assert (! apple_arm64 :named apple_arm64_is_the_distinguishing_target))
-(assert (! c_function_is_variadic :named fcntl_has_two_fixed_arguments_then_varargs))
+(assert (! transition_returned_success
+           :named successful_transition_path_is_in_domain))
 (assert (! varargs_boundary_declared
            :named binding_declares_varargs_after_two))
-(assert (! setfl_returned_success
-           :named successful_transition_path_is_in_domain))
-(assert (! postcondition_checked
-           :named f_getfl_readback_follows_f_setfl))
+
+; Winsock has no portable getter for a socket's blocking mode, so no read-back
+; is available there. Inventing one would be a worse oracle than the value it
+; checks.
+(assert (! (=> windows (not flag_readback_performed))
+           :named windows_has_no_flag_getter))
+; POSIX always re-reads the flags before any handle is marked.
+(assert (! (=> (not windows) flag_readback_performed)
+           :named posix_reads_flags_back_before_marking))
+; The Windows substitute, and the reason it is admissible: a call that reported
+; would-block did not block, and a descriptor that does not block is not in
+; blocking mode.
+(assert (! (=> would_block_evidence nonblocking_observed)
+           :named would_block_is_behavioral_evidence_of_the_mode))
 
 (assert
+  (! (= postcondition_established
+        (ite windows
+             would_block_evidence
+             (and flag_readback_performed nonblocking_observed)))
+     :named platform_neutral_postcondition_definition))
+(assert
   (! (= handle_marked_nonblocking
-        (and setfl_returned_success postcondition_checked
-             nonblocking_observed))
-     :named mark_iff_success_and_observed_postcondition))
+        (and transition_returned_success postcondition_established))
+     :named mark_iff_success_and_established_postcondition))
 (assert
   (! (= short_operation_admitted handle_marked_nonblocking)
      :named short_operation_requires_marked_handle))
 (assert
   (! (= native_call_can_block
         (and short_operation_admitted (not nonblocking_observed)))
-     :named absent_flag_is_the_blocking_hazard))
+     :named absent_nonblocking_mode_is_the_blocking_hazard))
+; Only the POSIX transition runs through a variadic C function; ioctlsocket is
+; an ordinary fixed-arity call, so this branch is scoped to non-Windows.
 (assert
   (! (= declaration_violation
-        (and apple_arm64 c_function_is_variadic
+        (and (not windows) apple_arm64 c_function_is_variadic
              (not varargs_boundary_declared)))
      :named declaration_violation_definition))
 (assert

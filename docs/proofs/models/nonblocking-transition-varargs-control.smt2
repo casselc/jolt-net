@@ -1,20 +1,18 @@
-; Buggy control for nonblocking-transition-corrected.smt2, in its Windows form.
+; Preserved POSIX control for nonblocking-transition-corrected.smt2.
 ;
-; This is the specific hazard task W2 has to avoid. Windows offers no getter
-; for a socket's blocking mode, so the tempting shortcut is to mark the handle
-; on a successful ioctlsocket return and call that the postcondition. But the
-; return code only says the call was accepted. It does not say the mode
-; changed -- and with a wrong-width u_long argument cell (a Windows long and
-; u_long are 32 bits even on Win64) ioctlsocket can read a value the caller
-; never fully wrote.
+; The buggy model now carries the Windows hazard (marking from an ioctlsocket
+; return code with no getter and no behavioral evidence). This file retains the
+; ORIGINAL Apple arm64 hazard so making the postcondition platform-neutral did
+; not quietly drop the witness that motivated the read-back in the first place.
 ;
-; Bounded domain: one ioctlsocket transition, one handle mark, one try-accept
-; admission. This control marks from the return code alone and collects no
-; behavioral evidence.
+; Bounded domain: one Apple-arm64 fcntl F_SETFL transition, one handle mark,
+; one try-accept admission. This control declares fcntl as a fixed
+; three-argument function and treats rc=0 as proof that O_NONBLOCK took effect.
+; Apple arm64 places arguments after `...` on the stack, so a fixed declaration
+; need not deliver the third argument where fcntl actually reads it.
 ;
-; Expected: sat. ioctlsocket reports success, the descriptor is nevertheless
-; still in blocking mode, the handle is marked anyway, and a blocking-capable
-; accept is admitted into a lease that is supposed to be short.
+; Expected: sat. F_SETFL returns success, O_NONBLOCK is absent, the handle is
+; marked non-blocking anyway, and a blocking-capable accept is admitted.
 
 (set-option :produce-unsat-cores true)
 
@@ -25,7 +23,6 @@
 (declare-const transition_returned_success Bool)
 (declare-const nonblocking_observed Bool)
 (declare-const flag_readback_performed Bool)
-(declare-const would_block_evidence Bool)
 (declare-const handle_marked_nonblocking Bool)
 (declare-const short_operation_admitted Bool)
 (declare-const native_call_can_block Bool)
@@ -33,15 +30,18 @@
 (declare-const lease_violation Bool)
 (declare-const violation Bool)
 
-(assert (! windows :named ioctlsocket_target))
-(assert (! (not flag_readback_performed)
-           :named windows_has_no_flag_getter_to_read))
+(assert (! (not windows) :named fcntl_target))
+(assert (! apple_arm64 :named apple_arm64_is_the_distinguishing_target))
+(assert (! c_function_is_variadic
+           :named fcntl_has_two_fixed_arguments_then_varargs))
+(assert (! (not varargs_boundary_declared)
+           :named buggy_binding_declares_a_fixed_third_argument))
 (assert (! transition_returned_success
            :named native_return_value_looks_successful))
-(assert (! (not would_block_evidence)
-           :named buggy_path_collects_no_behavioral_evidence))
 (assert (! (not nonblocking_observed)
-           :named the_mode_did_not_actually_change))
+           :named third_argument_was_not_effective))
+(assert (! (not flag_readback_performed)
+           :named buggy_path_does_not_read_flags_back))
 
 (assert
   (! (= handle_marked_nonblocking transition_returned_success)
@@ -52,7 +52,7 @@
 (assert
   (! (= native_call_can_block
         (and short_operation_admitted (not nonblocking_observed)))
-     :named absent_nonblocking_mode_makes_accept_blocking_capable))
+     :named absent_flag_makes_accept_blocking_capable))
 (assert
   (! (= declaration_violation
         (and (not windows) apple_arm64 c_function_is_variadic

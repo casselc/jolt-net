@@ -277,23 +277,66 @@ to Chez's `(__varargs_after 2)` convention. jolt-net additionally reads
 the corrected ABI declaration: it makes a future compiler, libc, or binding
 regression fail closed before any short lease is admitted.
 
-- `nonblocking-transition-buggy.smt2` is **sat**: fixed-arity declaration,
-  apparent `F_SETFL` success, absent `O_NONBLOCK`, marked handle, and a
-  blocking-capable accept are all present in one witness.
+Task W2 generalized this postcondition, because Windows cannot satisfy it the
+same way. Winsock reaches non-blocking mode through `ioctlsocket(FIONBIO)` and
+exposes **no portable getter** for a socket's blocking mode, so there is nothing
+to read back. Inventing a substitute getter — inferring the mode from a
+speculative call, for instance — would be a worse oracle than the value it
+checks, so jolt-net does not. The postcondition is therefore stated per target
+rather than as "read the flag back":
+
+| Target | Transition | Postcondition evidence |
+|---|---|---|
+| POSIX | `fcntl(F_SETFL)` | `F_GETFL` re-reads `O_NONBLOCK` in process |
+| Windows | `ioctlsocket(FIONBIO)` | a real `accept`/`recv` returns would-block |
+
+The Windows half is admissible for a precise reason: a call that reported
+would-block did not block, and a descriptor that does not block is not in
+blocking mode. That is direct behavioral evidence of the same fact `F_GETFL`
+reports, obtained where no getter exists. It is asserted natively rather than
+in process — `jolt.net.nonblocking/postcondition-kind` names which of the two a
+target relies on, so the difference stays visible instead of being implied by a
+platform branch.
+
+- `nonblocking-transition-buggy.smt2` is **sat**, now carrying the Windows
+  hazard: `ioctlsocket` reports success, no getter exists and no behavioral
+  evidence is collected, the handle is marked from the return code alone, and a
+  blocking-capable accept is admitted. This is exactly the shortcut a platform
+  without a getter invites, and a wrong-width `u_long` argument cell is one
+  concrete way to reach it.
+- `nonblocking-transition-varargs-control.smt2` is **sat** and retains the
+  original Apple arm64 witness — fixed-arity declaration, apparent `F_SETFL`
+  success, absent `O_NONBLOCK`, marked handle, blocking-capable accept — so
+  making the postcondition platform-neutral did not quietly drop the witness
+  that motivated the read-back in the first place.
 - `nonblocking-transition-corrected.smt2` makes both violation branches
-  **unsat**: the Apple-arm64 declaration has the explicit boundary, and
-  admission without the observed bit contradicts the mark postcondition. The
-  solver leaves `nonblocking_observed` unconstrained, so this is a fail-closed
-  safety result rather than an assumption that the syscall must work.
-- `nonblocking-transition-nonvacuity.smt2` is **sat** when read-back observes
-  the bit; the handle is marked and a useful short operation is admitted.
+  **unsat** for both targets. `nonblocking_observed` stays unconstrained on
+  either platform, so this remains a fail-closed safety result rather than an
+  assumption that the syscall must work. The unsat core names
+  `platform_neutral_postcondition_definition`,
+  `would_block_is_behavioral_evidence_of_the_mode`, and
+  `mark_iff_success_and_established_postcondition` — the platform-neutral
+  postcondition is load-bearing, not decorative.
+- `nonblocking-transition-nonvacuity.smt2` is **sat** and carries **both**
+  targets as independent copies of the bounded domain, so one satisfying model
+  shows `useful_posix_operation` and `useful_windows_operation` are
+  simultaneously true. Neither platform's postcondition is vacuously
+  unsatisfiable.
 
 The runtime counterpart independently calls `F_GETFL` on a newly returned
 listener and requires `O_NONBLOCK` before the rest of the poller suite runs. It
 also injects the motivating bad outcome—apparent `F_SETFL` success followed by
 a read-back without the bit—and requires a fail-closed exception after the
 second `F_GETFL`. The core FFI test exercises the same variadic `fcntl` binding
-and transition. The complete Darwin arm64 gate passed with source-built Chez
+and transition.
+
+On Windows the runtime counterpart is behavioral rather than a read-back:
+`test/jolt/net/nonblocking_test_main.clj` requires `try-accept` on a listener
+with no pending client, and a read on a freshly accepted socket with no pending
+data, to return `::would-block` as a VALUE. A descriptor still in blocking mode
+would park the thread instead, so the suite's own watchdog would report a
+timeout rather than a pass. That gate ran green on native Windows x86-64; see
+`docs/PLATFORM-COVERAGE.md`. The complete Darwin arm64 gate passed with source-built Chez
 10.4.1 for commit `65a0f1e` in
 [CI run 30078697403](https://github.com/casselc/jolt-net/actions/runs/30078697403),
 closing the platform-specific runtime evidence for this bounded surface. The

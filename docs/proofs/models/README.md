@@ -28,6 +28,13 @@ Three more files were added on 2026-07-24 for task W1
 `winsock-init-once-buggy.smt2`, `winsock-init-once-corrected.smt2`, and
 `winsock-init-once-nonvacuity.smt2`.
 
+Task W2 made the non-blocking-transition postcondition platform-neutral and
+added `nonblocking-transition-varargs-control.smt2`, bringing the directory to
+31 files. That run DID use a standalone solver: z3 5.0.0, installed into a
+throwaway directory and invoked exactly as the shell example above. All 31
+files were run and every one matched its expected verdict — every `-corrected`
+model `unsat`, every `-buggy`, `-control`, and `-nonvacuity` model `sat`.
+
 ## Expected results
 
 | Model | Expected | Essential witness or unsat core |
@@ -44,9 +51,10 @@ Three more files were added on 2026-07-24 for task W1
 | `readiness-generation-mismatch.smt2` | `unsat` | generation mismatch conflicts with complete-token dispatch |
 | `readiness-revision-mismatch.smt2` | `unsat` | revision mismatch conflicts with complete-token dispatch |
 | `readiness-current-token-nonvacuity.smt2` | `sat` | fd `8`, generation `10`, revision `3`, dispatch allowed |
-| `nonblocking-transition-buggy.smt2` | `sat` | fixed declaration, successful return, absent bit, marked handle, blocking-capable admission |
-| `nonblocking-transition-corrected.smt2` | `unsat` | explicit ABI boundary plus observed-bit mark postcondition exclude both violation branches |
-| `nonblocking-transition-nonvacuity.smt2` | `sat` | observed bit permits a marked handle and useful short operation |
+| `nonblocking-transition-buggy.smt2` | `sat` | Windows hazard: `ioctlsocket` succeeds, no getter and no behavioral evidence, handle marked from the return code alone, blocking-capable admission |
+| `nonblocking-transition-varargs-control.smt2` | `sat` | preserved Apple arm64 witness: fixed declaration, successful return, absent bit, marked handle, blocking-capable admission |
+| `nonblocking-transition-corrected.smt2` | `unsat` | explicit ABI boundary plus the platform-neutral mark postcondition exclude both violation branches on both targets |
+| `nonblocking-transition-nonvacuity.smt2` | `sat` | POSIX read-back and Windows would-block evidence are simultaneously useful; both `useful_*_operation` true |
 | `accept-terminal-close-buggy.smt2` | `sat` | pre-entry wake consumed; poller remains open; accept remains blocked after listener close |
 | `accept-terminal-close-corrected.smt2` | `unsat` | active await exits, late await is rejected, and no callback/native-close wait cycle exists |
 | `accept-terminal-close-nonvacuity.smt2` | `sat` | removal callback first; active await exits; listener close succeeds |
@@ -88,7 +96,9 @@ revision mismatch:
 
 nonblocking transition corrected:
   binding_declares_varargs_after_two
-  mark_iff_success_and_observed_postcondition
+  would_block_is_behavioral_evidence_of_the_mode
+  platform_neutral_postcondition_definition
+  mark_iff_success_and_established_postcondition
   short_operation_requires_marked_handle declaration_violation_definition
   lease_violation_definition violation_definition property_violated
 
@@ -168,7 +178,16 @@ interleaving tests supply the semantic oracle:
   marked. `test/jolt/net/poller_test.clj` independently observes the bit on a
   returned listener and injects the buggy control where `F_SETFL` appears to
   succeed but read-back still lacks the bit. These are the source and runtime
-  oracles for the non-blocking-transition models.
+  oracles for the POSIX half of the non-blocking-transition models.
+- `jolt.net.nonblocking/set-raw!` dispatches to `ioctlsocket(FIONBIO)` on
+  Windows, at the probed `u_long` width, and `postcondition-kind` returns
+  `:call-status` there because Winsock has no portable getter to read back.
+  The behavioral postcondition is the runtime oracle instead:
+  `test/jolt/net/nonblocking_test_main.clj` requires `try-accept` with no
+  pending client, and a read with no pending data, to return `::would-block` as
+  a value. A descriptor still in blocking mode would park the thread, so that
+  suite's watchdog reports a timeout rather than a pass. This is the source and
+  runtime oracle for the Windows half.
 - `jolt.net/accept` installs a terminal listener before poller registration;
   `jolt.net.poller/close!` retires admission and waits for an active await to
   exit. `jolt.net.handle/release!` can release the await's listener lease while
