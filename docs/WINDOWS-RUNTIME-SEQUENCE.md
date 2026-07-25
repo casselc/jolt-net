@@ -126,6 +126,10 @@ the required host-execution permission instead of changing the implementation.
 
 Branch: `claude/windows-blocking-sockets`
 
+Status: implementation review/integration in progress. W1 is not accepted and
+W2 must not branch until every acceptance gate below is green on one committed
+revision.
+
 Scope:
 
 - Make Winsock initialization precede every Winsock operation, including
@@ -201,8 +205,10 @@ Implement and probe `ioctlsocket(FIONBIO)`, Windows nonblocking accept/connect,
 `recv`, `send`, and `getsockopt(SO_ERROR)`. Preserve the existing value contract
 for would-block, EOF, in-progress, and connected states. Add real partial-slice,
 EOF, half-close, refused-connect, ownership-after-failed-completion, and
-capture-before-cleanup tests. Extend the nonblocking-transition proof so the
-postcondition is platform-neutral. Do not add a poller in this task.
+capture-before-cleanup tests. Every failure-sensitive native call must consume
+an explicit captured result; a separate post-call last-error read is not an
+acceptable Windows implementation. Extend the nonblocking-transition proof so
+the postcondition is platform-neutral. Do not add a poller in this task.
 
 Stop after W2 and return the evidence.
 
