@@ -587,10 +587,83 @@ seam must still deliver the current token, after which close succeeds normally.
 Real `WSAPoll` behavior remains covered by the independent socket cases in the
 same suite.
 
-**Limit.** This is a refusal invariant for the temporary internal adapter, not
-the final Windows close protocol. W4 must replace the refusal with an
-owner-independent wake and must re-prove close completion, wake coalescing,
-admitted-writer retirement, and descriptor lifetime under that transport.
+**Limit.** This is a refusal invariant for the internal adapter, not the Windows
+close protocol. Task W4 supplied the transport and discharged that obligation in
+§8; this section is retained because the adapter still exists and still refuses
+exactly as described, and because that evidence is about a poller built *without*
+a waker. It must not be read as evidence for the W4 transport.
+
+---
+
+## 8. On a byte-only transport, close's terminal wake is the only cancellation
+
+**Bounded claim.** Once close has won the lifecycle transition on a poller whose
+transport is `:byte-only`, no await can park in the native wait with nothing
+able to release it. This covers one close and one await.
+
+**The premise that makes this a distinct claim.** The POSIX self-pipe and the
+Windows datagram pair differ in exactly one respect, and it is decisive:
+
+| Transport | Sender retirement observable to receiver? | Cancellation sources |
+|---|---|---|
+| POSIX self-pipe | yes, `POLLHUP` | published byte **or** hangup |
+| Windows datagram | **no** | published byte **only** |
+
+`jolt.net.wake/terminal-wake` names this: `:byte-or-hangup` versus `:byte-only`.
+Any `WSAECONNRESET` a connected UDP receiver may surface after its peer is
+retired comes from a best-effort ICMP port-unreachable; it is not a protocol
+guarantee, and `jolt.net.wake` classifies it as benign drain noise precisely so
+that nothing can come to depend on it. Datagram peer close is not a hangup
+oracle.
+
+**Counterexample and correction.** Publishing a byte is not by itself enough.
+The await's own pre-snapshot drain exists to consume a byte left by an earlier
+acknowledged mutation, and it will just as happily consume close's terminal
+byte — after which the await parks with nothing left. The drain's epoch-restore
+cannot save it either: that restore goes through ordinary writer admission,
+which close has retired by then. On POSIX this defect is invisible, because the
+retired write end still supplies `POLLHUP`.
+
+Two changes close it, and both are ordering rather than mechanism:
+
+1. `jolt.net.poller/close!` publishes the terminal byte at step 3, while sends
+   are still admitted, and only then retires admission at step 4. The publish
+   deliberately bypasses the coalescing gate, because that gate can read `true`
+   for a producer whose own send has not landed.
+2. `jolt.net.poller/await-ready` re-reads the lifecycle *after* its last drain
+   and *before* the native call. For the terminal byte to have been drained,
+   the publish — and therefore the `:closing` transition preceding it — must
+   already have happened, so that read cannot still see `:open`. Parking is
+   refused in exactly the case where nothing could wake it.
+
+**Models and controls.** `windows-terminal-wake-corrected.smt2` is `unsat`;
+deleting only the pre-entry check makes `windows-terminal-wake-buggy.smt2`
+`sat` with the interleaving above, and `-nonvacuity` is `sat` with a real park
+really cancelled, so the check is not "never wait".
+`close-completion-ordering-corrected.smt2` is `unsat` for the publish/retire
+order and the `:closed`-before-return rule; its buggy control swaps steps 3 and
+4 and shows close reporting completion having delivered nothing.
+`wake-receiver-lease-corrected.smt2` covers receiver lifetime and records that
+close's ordering and the owned handle's deferred native close are
+*independently* sufficient — it is still `unsat` with either deleted.
+`posix-pipe-hangup-independence-control.smt2` is `sat` and exists to keep the
+POSIX second path from being silently borrowed by a Windows claim; no Windows
+model in this directory contains a hangup term.
+
+**Executable companion.** The native W4 gate drives the public
+`jolt.net/open-poller` over real Winsock sockets: an empty poller woken, a
+blocked await woken, acknowledged update and removal against a parked wait,
+registered-socket close, terminal close, repeated and concurrent close, close
+against an admitted wake sender, a wake injected inside the drain/reset window,
+an await admission racing close's CAS, and receiver lifetime sampled from inside
+the wait. No test uses elapsed time as its success oracle: a blocked await is
+given a 120 s timeout and observed with a 15 s watchdog, so returning at all
+proves it was woken.
+
+**Limit.** This is a bounded interleaving argument over one await and one close.
+It assumes the published datagram is delivered to the connected loopback peer
+and that the native wait is level-triggered on the receiver. Those are Winsock
+premises exercised by the native gate, not established here.
 
 ---
 

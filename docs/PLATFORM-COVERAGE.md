@@ -23,7 +23,7 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 |---|---|---|---|---|
 | Linux x86-64 | **probed** | **runtime** | **runtime** | The development and CI platform. Real `fcntl`, `poll`, pipe-wake, sliced byte I/O, EOF, non-blocking connect/`SO_ERROR`, mutation wake, and close races are exercised. |
 | Linux aarch64 | **probed** | **runtime** | **runtime** | The `ubuntu-24.04-arm` job diffs every freshly probed fact against the explicit x86-64 alias before running real sockets. Probe, blocking/non-blocking runtime, poller races, and required Hegel properties passed on revision `f0affc4` in CI run `30144054281`. |
-| Windows x86-64 | **probed** | **runtime** | **candidate** (byte I/O, connect, and `WSAPoll` readiness; **public poller still fail-closed**) | W1 162/162, W2 56/56, and the reviewed W3 `WSAPoll` gate 124/124 all passed locally with observed exit code 0 on revision `2bd40ff`, against native Chez 10.4.1 and the pinned Jolt fork `85f645aa`. The `WSAPOLLFD` layout, flag values, and `WSAPoll` signature are probed from real Windows headers and gated byte-for-byte by the drift job. Readiness covers read, write, error, hangup/EOF, zero and positive timeouts, captured failure, readiness-driven connect completion, forced short reads, stale generation/revision/removal token rejection, and atomic wake-less close refusal against an admitted await. The wake and close lifecycle remains W4, so `jolt.net/open-poller` still fails closed here and the W3 evidence comes from the internal wake-less adapter. Keep this at candidate until the exact reviewed revision is green in hosted CI. |
+| Windows x86-64 | **probed** | **runtime** | **candidate** (byte I/O, connect, `WSAPoll` readiness, **and the public poller**) | W1 162/162, W2 56/56, W3 124/124, and the new W4 public-poller gate 73/73 all passed locally with observed exit code 0 on the revision recorded in `docs/WINDOWS-RUNTIME-SEQUENCE.md`, against native Chez 10.4.1 and the pinned Jolt fork `85f645aa`. The `WSAPOLLFD` layout, flag values, and `WSAPoll` signature are probed from real Windows headers and gated byte-for-byte by the drift job; a local MinGW re-run of `tools/probe-constants.c` on this revision showed no drift from the committed table. Readiness covers read, write, error, hangup/EOF, zero and positive timeouts, captured failure, readiness-driven connect completion, forced short reads, and stale generation/revision/removal token rejection. Task W4 added an owner-independent wake transport — a connected IPv4 loopback datagram pair, chosen because both ends are real `SOCKET`s and `WSAPoll` accepts nothing else — so `jolt.net/open-poller` now works here, `close!` is a completion boundary rather than a refusal, and blocking `accept` is readiness-driven. The W3 wake-less adapter is retained, and its refusals remain evidence for a poller built *without* a waker rather than for this transport. **Still candidate**: hosted Windows CI has not run this revision, and that promotion is task W5. |
 | Windows aarch64 | **preview artifact** | none | none | CI run `30144909720` built native `tarm64nt` Chez 10.4.1, executed the ABI probe with ARM64 MSVC, and passed direct source-mode target/fail-closed selection. The uploaded facts match Windows x86-64 after normalizing only CRLF and the architecture label, but no descriptor is committed yet. |
 | macOS arm64 | **probed** | **runtime** | **runtime** | The complete native suite passes with source-built Chez 10.4.1: variadic-ABI-correct `fcntl`, `poll(2)`, non-blocking connect/`SO_ERROR`, sliced byte I/O, SIGPIPE, close races, and the owner-independent self-pipe protocol, with Darwin's distinct 32-bit `nfds_t` binding. |
 | macOS x86-64 | **probed** | **runtime** | **runtime** | The live x86_64 probe is normalized only at the architecture label and diffed against the explicit shared-Darwin descriptor. Probe, full socket/poller runtime, source-built pinned libhegel, and required Hegel properties passed on revision `f0affc4` in CI run `30144054281`. |
@@ -86,29 +86,48 @@ Do not summarize this file as "supports Linux, macOS and Windows."
   `docs/proofs/socket-invariants.md` and the separate
   `docs/proofs/models/{posix-nonblocking-transition,windows-nonblocking-contract}-*.smt2`
   model families.
-- **Windows readiness exists; the Windows wake and close lifecycle does not.**
-  Task W3 added a real `WSAPoll` backend under `jolt.net.readiness`, exercised
-  by the native `-M:wsapoll-test` gate against real Winsock handles. What it
-  does NOT add is an owner-independent wake transport, which is task W4. Because
-  explicit `wake!`, cancellation of a blocked await, and terminal close against
-  a blocked await cannot be implemented honestly without one, the PUBLIC Windows
-  poller remains fail-closed: `jolt.net/open-poller` still throws
-  `:unsupported-target` there. W3's evidence comes from the internal
-  `jolt.net.poller/open-readiness-adapter`, which runs the SAME registration and
-  token state machine with no wake, and which refuses -- rather than degrades --
-  every wake-dependent operation. A mutation acknowledged on that adapter is
-  visible to the NEXT await, not to one already parked in `WSAPoll`. Post-W3
-  review also made the temporary close refusal atomic with await admission: the
-  wake-less adapter either rejects the exact lifecycle value containing an
-  active await or transitions that same observed value to `:closing`. The
-  expanded 124-check native gate passed on the reviewed tip before W4 branches.
-- **Windows blocking accept after a non-blocking transition is unchanged.** W3
-  did not make mode and admission atomic, so the W2 boundary is retained
-  deliberately rather than replaced: `accept` on a listener that `try-accept`
-  switched to non-blocking still fails with
-  `:jolt.net/requires :windows-readiness`, and concurrent `accept` and
-  `try-accept` on one Windows listener remain unsupported. Readiness did not
-  become a blocking-mode getter either; `postcondition-kind` is still
+- **Windows now has both readiness and a wake transport.** Task W3 added the
+  `WSAPoll` backend under `jolt.net.readiness`; task W4 added the waker under
+  `jolt.net.wake` and promoted Windows into the public poller. The waker is a
+  connected IPv4 loopback datagram pair. That choice is not arbitrary and not
+  merely convenient: `WSAPoll` accepts only `SOCKET`s, and one non-socket handle
+  in its array can fail the **entire** call with `WSAENOTSOCK` rather than
+  marking that one entry, so an anonymous pipe would not degrade gracefully — it
+  would destroy the readiness of every other registered socket in the same wait.
+  Both ends are switched to non-blocking mode before ownership is published, and
+  every partially constructed handle is closed on rollback.
+
+  The transports are **not** interchangeable at their terminal edge, and the
+  close protocol does not pretend otherwise. Retiring a connected datagram
+  *sender* is invisible to its peer: no hangup, no error, no readiness event. So
+  a published terminal **byte** is the only Windows cancellation guarantee,
+  where POSIX additionally gets `POLLHUP` from the retired pipe. `close!`
+  therefore publishes that byte at step 3, while sends are still admitted, and
+  only then retires admission at step 4; and `await-ready` re-reads the
+  lifecycle after its last drain and before the native call, because that drain
+  can legitimately consume the terminal byte. Any `WSAECONNRESET` a connected
+  UDP receiver surfaces after its peer is retired is an ICMP port-unreachable
+  artifact, not a protocol guarantee; `jolt.net.wake` classifies it as benign
+  drain noise so nothing can come to depend on it. See
+  `docs/proofs/socket-invariants.md` §8.
+
+  The internal `jolt.net.poller/open-readiness-adapter` is retained. It runs the
+  same registration and token state machine with **no** waker and refuses —
+  rather than degrades — every wake-dependent operation, and the W3 gate still
+  proves that. It is evidence about a poller built without a transport, and is
+  explicitly not evidence for the W4 one.
+- **Windows blocking accept is now readiness-driven, and W2's mixed-mode refusal
+  is gone.** That refusal existed for exactly one reason: native blocking
+  `accept` could not be interrupted, so mixing it with a listener `try-accept`
+  had switched to non-blocking mode was unsound. Task W4 removed native blocking
+  accept from Windows entirely — `accept` there now uses the same short
+  non-blocking accept leases plus close-wakeable poller as POSIX — so mixing is
+  sound and listener close is a bounded completion boundary rather than an
+  uninterruptible park. The native W4 gate covers accept after a prior
+  `try-accept`, accept and `try-accept` interleaved, and listener close racing a
+  blocked accept, and asserts that the release is an ownership failure rather
+  than a native one, so no syscall reached a closing descriptor. Readiness did
+  not become a blocking-mode getter; `postcondition-kind` is still
   `:call-status` on Windows.
 - **`WSAPoll` diverges from POSIX `poll` behaviorally, not just numerically.**
   Both differences are asserted by the W3 gate rather than smoothed over. A peer

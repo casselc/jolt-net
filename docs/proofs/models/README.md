@@ -69,6 +69,57 @@ errors and verified the buggy interleaving `sat`, the corrected violation query
 remains the exact evidence for Claude's original 35-file W3 tip; it is not
 retroactively described as a run of these three review additions.
 
+## Task W4: the Windows wake transport
+
+Task W4 gave the poller an owner-independent wake transport on Windows -- a
+connected IPv4 loopback datagram pair -- and promoted Windows through the public
+`jolt.net/open-poller`. Ten files were added, bringing the directory to 48.
+
+The organizing principle for the additions is that the POSIX and Windows
+transports differ in **exactly one premise**, and that premise is load-bearing:
+closing a POSIX pipe's write end makes the retained read end report `POLLHUP`,
+whereas retiring a connected datagram sender is *invisible* to its peer. The
+claims are therefore kept deliberately separate rather than merged into one
+"wake transport" family:
+
+| Concern | Files | Transport |
+|---|---|---|
+| generic writer admission and ordered retirement | `wake-pair-*` | both |
+| generic wake epoch and coalescing | `wake-epoch-*` | both |
+| receiver lease lifetime across a native wait | `wake-receiver-lease-*` | both |
+| close-completion ordering (publish before retire) | `close-completion-ordering-*` | both, decisive on Windows |
+| Windows datagram terminal-wake delivery | `windows-terminal-wake-*` | Windows only |
+| POSIX pipe hangup as a second, independent path | `posix-pipe-hangup-independence-control.smt2` | POSIX only |
+
+`wake-pair-*` and `wake-epoch-*` were **generalized, not rewritten**. Their
+premises -- one CAS admission gate shared with retirement, the handle lease
+released before the counted writer admission, and arithmetic over the poller's
+own epoch counter -- name no descriptor, syscall, or delivery guarantee, so they
+already held for both transports; only the POSIX-flavoured naming and the
+missing statement of what they do *not* cover were changed. Each file now says
+explicitly that sender-retirement observability and SIGPIPE are outside its
+scope.
+
+`windows-wakeless-close-race-*` is **retained unchanged in substance** and
+re-labelled. It is evidence about `jolt.net.poller/open-readiness-adapter`, the
+internal Windows poller built with no waker, which still exists and still
+refuses exactly as modelled. It is explicitly *not* evidence for the W4
+transport, and each file now says so.
+
+`wake-receiver-lease-corrected.smt2` records a defence-in-depth finding rather
+than a single guarantee: the receiver is protected both by close's ordering
+(retirement only from a lifecycle with no admitted await) and independently by
+the owned handle deferring its native close to the last lease releaser. **Either
+alone is sufficient** -- the corrected model is still `unsat` with either
+premise deleted, and only deleting both makes the violation reachable. That was
+checked rather than assumed, and the buggy control deletes both and says why.
+
+All 48 files were run through a standalone `z3` 5.0.0, installed into a
+throwaway directory and invoked exactly as the shell example above: 17 `unsat`
+and 31 `sat`, every file matching its declared verdict. The three new corrected
+models were additionally verified through Chiasmus, which returned identical
+`unsat` verdicts and identical unsat cores.
+
 ## Expected results
 
 | Model | Expected | Essential witness or unsat core |
@@ -99,6 +150,16 @@ retroactively described as a run of these three review additions.
 | `accept-terminal-close-buggy.smt2` | `sat` | pre-entry wake consumed; poller remains open; accept remains blocked after listener close |
 | `accept-terminal-close-corrected.smt2` | `unsat` | active await exits, late await is rejected, and no callback/native-close wait cycle exists |
 | `accept-terminal-close-nonvacuity.smt2` | `sat` | removal callback first; active await exits; listener close succeeds |
+| `windows-terminal-wake-buggy.smt2` | `sat` | the await's own pre-snapshot drain consumes close's terminal byte, then it parks with no hangup available |
+| `windows-terminal-wake-corrected.smt2` | `unsat` | `publish_follows_the_winning_transition`, `phase_check_follows_the_last_drain`, `await_parks_iff_it_read_an_open_lifecycle`, `byte_consumed_only_by_a_later_drain`, `byte_is_the_only_wake_and_it_is_level_triggered`, `stranded_iff_parked_unwakeable_while_close_waits`, `property_violated` |
+| `windows-terminal-wake-nonvacuity.smt2` | `sat` | a real park is really cancelled by the terminal byte, so the pre-entry check is not "never wait" |
+| `wake-receiver-lease-buggy.smt2` | `sat` | with BOTH guarantees deleted, the receiver's native close lands inside the wait |
+| `wake-receiver-lease-corrected.smt2` | `unsat` | `await_leases_across_the_wait_and_releases_before_exit`, `owned_handle_defers_native_close_until_the_last_lease`, `violation_iff_closed_before_the_wait_finished`, `property_violated` (still `unsat` with either guarantee alone) |
+| `wake-receiver-lease-nonvacuity.smt2` | `sat` | the receiver really is retired (no leak) after a wait that really held the lease |
+| `close-completion-ordering-buggy.smt2` | `sat` | admission retired before the terminal wake, so close reports completion having delivered nothing |
+| `close-completion-ordering-corrected.smt2` | `unsat` | `publish_precedes_admission_retirement`, `return_follows_the_closed_phase`, `delivery_iff_published_before_retirement`, `violation_iff_completed_without_wake_or_before_closed`, `property_violated` |
+| `close-completion-ordering-nonvacuity.smt2` | `sat` | close really completes, having really delivered a wake, from a really `:closed` lifecycle |
+| `posix-pipe-hangup-independence-control.smt2` | `sat` | the terminal byte is drained early and hangup ALONE still releases the await -- a POSIX-only path no Windows model may borrow |
 | `wake-pair-buggy.smt2` | `sat` | admit/read-close/write/release steps `0/2/3/4` |
 | `wake-pair-corrected.smt2` | `unsat` | CAS gate, lease-before-count release, drain, write-first/read-last |
 | `wake-pair-nonvacuity.smt2` | `sat` | writer crosses retirement, drains, and both ends close |

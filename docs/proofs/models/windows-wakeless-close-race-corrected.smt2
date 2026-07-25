@@ -1,6 +1,18 @@
 ; Claim: the Windows W3 wake-less adapter never enters :closing while an await
 ; is active.
 ;
+; STATUS AFTER TASK W4. This family remains valid and is NOT evidence for the
+; W4 transport. It describes `jolt.net.poller/open-readiness-adapter`, the
+; INTERNAL Windows poller constructed with no waker, which still exists and
+; still refuses exactly as modelled here. The public Windows poller obtained
+; from `jolt.net/open-poller` always has a transport and does NOT refuse; its
+; close is a completion boundary, modelled in
+; close-completion-ordering-corrected.smt2 and
+; windows-terminal-wake-corrected.smt2.
+;
+; Do not relabel this as proof of the W4 transport. It is the historical, and
+; still-reproducible, evidence for a poller that has none.
+;
 ; Source anchor: jolt.net.poller/close!. The corrected implementation examines
 ; :awaiting? on the exact lifecycle value supplied to compare-and-set!. If an
 ; await won first, close refuses. If close won first, await's CAS against :open

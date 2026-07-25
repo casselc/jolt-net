@@ -1,5 +1,17 @@
 ; Non-vacuity control for windows-wakeless-close-race-corrected.smt2.
 ;
+; STATUS AFTER TASK W4. This family remains valid and is NOT evidence for the
+; W4 transport. It describes `jolt.net.poller/open-readiness-adapter`, the
+; INTERNAL Windows poller constructed with no waker, which still exists and
+; still refuses exactly as modelled here. The public Windows poller obtained
+; from `jolt.net/open-poller` always has a transport and does NOT refuse; its
+; close is a completion boundary, modelled in
+; close-completion-ordering-corrected.smt2 and
+; windows-terminal-wake-corrected.smt2.
+;
+; Do not relabel this as proof of the W4 transport. It is the historical, and
+; still-reproducible, evidence for a poller that has none.
+;
 ; A wake-less adapter with no active await must still be able to transition from
 ; :open to :closing. The correction refuses only the lifecycle state it cannot
 ; terminate; it is not a deny-all close implementation.

@@ -392,6 +392,53 @@ Stop after W3 and return the evidence.
 Branch from the clean reviewed W3 tip, not Claude's original W3 tip:
 `claude/windows-poller-wake`.
 
+Status: implemented locally on `claude/windows-poller-wake`, branched from the
+reviewed W3 tip `08b24ea`. Native Windows x86-64 passed the new W4 public-poller
+gate 73/73, the W3 gate 124/124, the W2 gate 56/56, and the W1 gate 162/162, all
+with no skips and an observed exit code of 0, against native Chez 10.4.1 and the
+pinned Jolt fork `85f645aa` (worktree `D:\src\jolt-proposal-net-runtime-w3`). A
+local MinGW re-run of `tools/probe-constants.c` showed no drift from the
+committed `tools/probed/windows-x86-64.edn`. Linux passed the full
+Hegel-required suite 235/235 with no skips, plus the dependency-free W1, W2, W3,
+and W4 aliases; the W3 and W4 aliases correctly SKIP on a non-Windows target
+rather than proving POSIX behavior under a Windows name. All 48 bounded models
+were run through a standalone z3 5.0.0 and matched their declared verdicts (17
+unsat, 31 sat), and the three new corrected models were independently re-checked
+through Chiasmus with identical verdicts and identical unsat cores.
+
+The transport is a connected IPv4 loopback datagram pair. The hypothesis was
+validated rather than assumed: `WSAPoll` accepts only `SOCKET`s, and a
+non-socket handle in its array can fail the whole call with `WSAENOTSOCK`
+instead of marking one entry, so both ends being real sockets is the property
+that matters. Two things had to be true that a POSIX-shaped design would have
+got wrong, and the native gate is what established them:
+
+- **Retiring a datagram sender is invisible to its peer.** There is no hangup.
+  Cancellation therefore rests entirely on a terminal BYTE that close publishes
+  while sends are still admitted, never on peer close.
+  `jolt.net.wake/terminal-wake` names this difference (`:byte-only` versus
+  POSIX's `:byte-or-hangup`) so it stays a transport fact rather than an
+  assumption buried in close.
+- **Publishing the byte is not sufficient on its own.** An await's pre-snapshot
+  drain can legitimately consume it and then park with nothing left, and the
+  epoch-restore cannot help once admission is retired. `await-ready` therefore
+  re-reads the lifecycle after its last drain and before the native call. On
+  POSIX this defect is invisible, because the retired pipe still supplies
+  `POLLHUP` — which is exactly why it had to be found here.
+
+Two W2/W3 assertions described boundaries this task moved, and both were updated
+in place rather than deleted, so W2 stays at 56 and W3 at 124: the Windows
+mixed-mode blocking-accept refusal now asserts that accept SUCCEEDS, and W3's
+"the public Windows poller is still fail-closed" now asserts that it carries a
+wake transport. The wake-less readiness adapter and all of its refusals are
+retained untouched.
+
+### Evidence boundary handed to W5
+
+`PLATFORM-COVERAGE.md` stays at **candidate** for Windows x86-64. Every gate
+above ran locally; hosted Windows CI has not run this revision, and turning the
+PowerShell runners into a hosted gate is W5's work, not a claim W4 may make.
+
 Add an owner-independent Windows wake transport and promote the shared poller
 through `jolt.net/open-poller`. A connected IPv4 loopback datagram pair is the
 initial design candidate because both ends are real `SOCKET`s that `WSAPoll`

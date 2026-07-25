@@ -1,9 +1,27 @@
 ; Non-vacuity control for wake-pair-corrected.smt2.
 ;
+; TRANSPORT INDEPENDENCE (task W4). Every premise below -- one CAS admission
+; gate shared with retirement, the handle lease released before the counted
+; writer admission, retirement before sender close, and sender before receiver
+; -- is a property of jolt.net.poller's shared writer-admission protocol, not of
+; any one transport. It holds unchanged for the POSIX self-pipe and for the
+; Windows connected loopback datagram pair, so the naming here is generic.
+;
+; What this family does NOT cover, and must not be read as covering:
+;   - that retiring the sender is observable to the receiver. It is on POSIX
+;     (POLLHUP) and is NOT on Windows. See
+;     posix-pipe-hangup-independence-control.smt2 and
+;     windows-terminal-wake-corrected.smt2.
+;   - SIGPIPE. Ordering the sender's retirement after the writer drain is what
+;     makes closing the write end safe on POSIX; there are no admitted writers
+;     left by then. Windows has no SIGPIPE at all.
+;   - receiver lease lifetime across a native wait. See
+;     wake-receiver-lease-corrected.smt2.
+;
 ; The corrected protocol must permit a genuine race: a writer is admitted,
 ; close retires admission while that writer remains active, the writer performs
 ; its nonblocking write and releases in the required order, and close then
-; retires both pipe ends successfully.
+; retires both wake handles successfully.
 ;
 ; Expected: sat. In every witness admitted=true, retirement precedes the
 ; writer's write/release, and write-close precedes read-close.

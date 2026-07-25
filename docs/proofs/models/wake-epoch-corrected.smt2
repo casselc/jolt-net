@@ -1,6 +1,17 @@
 ; Claim: the sequence/epoch handshake prevents a wake admitted after await
 ; entry from disappearing in the drain/reset window.
 ;
+; TRANSPORT INDEPENDENCE (task W4). The epoch handshake is arithmetic over the
+; poller's own shared counter and Boolean gate. It names no descriptor, no
+; syscall and no delivery guarantee, so it holds unchanged for the POSIX
+; self-pipe and for the Windows connected loopback datagram pair.
+;
+; It does NOT cover close's terminal wake, which deliberately BYPASSES this
+; coalescing gate: the gate can read `true` for a producer whose own send has
+; not landed, and close needs a byte that is definitely in the receiver. That is
+; a separate claim -- see windows-terminal-wake-corrected.smt2 for delivery and
+; close-completion-ordering-corrected.smt2 for the publish/retire order.
+;
 ; The producer increments a monotonic epoch before attempting the Boolean-gated
 ; byte write. After drain resets the gate, it restores a byte when the epoch
 ; changed since drain began. Await also compares the epoch captured at entry,

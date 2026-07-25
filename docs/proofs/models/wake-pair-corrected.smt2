@@ -1,6 +1,24 @@
 ; Claim: one atomic admission gate plus writer drain and write-first/read-last
-; retirement prevents the self-pipe read end from closing while an admitted
+; retirement prevents the wake RECEIVER from closing while an admitted
 ; writer remains.
+;
+; TRANSPORT INDEPENDENCE (task W4). Every premise below -- one CAS admission
+; gate shared with retirement, the handle lease released before the counted
+; writer admission, retirement before sender close, and sender before receiver
+; -- is a property of jolt.net.poller's shared writer-admission protocol, not of
+; any one transport. It holds unchanged for the POSIX self-pipe and for the
+; Windows connected loopback datagram pair, so the naming here is generic.
+;
+; What this family does NOT cover, and must not be read as covering:
+;   - that retiring the sender is observable to the receiver. It is on POSIX
+;     (POLLHUP) and is NOT on Windows. See
+;     posix-pipe-hangup-independence-control.smt2 and
+;     windows-terminal-wake-corrected.smt2.
+;   - SIGPIPE. Ordering the sender's retirement after the writer drain is what
+;     makes closing the write end safe on POSIX; there are no admitted writers
+;     left by then. Windows has no SIGPIPE at all.
+;   - receiver lease lifetime across a native wait. See
+;     wake-receiver-lease-corrected.smt2.
 ;
 ; Bounded domain: one writer attempt and seven distinct protocol events,
 ; numbered 0..6. The admission CAS succeeds iff the attempt linearizes before
@@ -63,7 +81,7 @@
 ; writer drain before closing the write end.
 (assert
   (! (< admission_retire_step write_close_step)
-     :named admission_retires_before_pipe_close))
+     :named admission_retires_before_sender_close))
 (assert
   (! (=> writer_admitted
           (< writer_count_release_step write_close_step))
