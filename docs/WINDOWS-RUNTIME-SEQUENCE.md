@@ -520,6 +520,58 @@ corresponding hosted job is green on the exact revision.
 
 Stop after W5 and return the evidence.
 
+### W5 results
+
+The `windows-portable` job was updated in place rather than replaced, keeping
+its working toolchain: MSYS2 MINGW64 source build of official Chez 10.4.1, the
+exact proposal Jolt pin `85f645aa`, direct native PowerShell/Chez runners,
+dependency-free aliases, no AOT cache, and no jolt-hegel or artifact download
+anywhere in the socket path. It is now named for what it proves, and the stale
+comments claiming Windows lacked a wake transport and that the public poller was
+fail-closed are gone. All four gates run, W4 at its documented 300 s outer
+timeout.
+
+Hosted result on revision `0e66bcf`, [CI run
+30169225227](https://github.com/casselc/jolt-net/actions/runs/30169225227), all
+jobs green:
+
+| Gate | Count | Timeout | Exit |
+|---|---|---|---|
+| W1 blocking sockets | 162/162 | 90 s | 0 |
+| W2 non-blocking I/O | 56/56 | 90 s | 0 |
+| W3 `WSAPoll` readiness | 124/124 | 240 s | 0 |
+| W4 public poller and wake | 73/73 | 300 s | 0 |
+
+Exit codes are load-bearing rather than incidental. `if ($LASTEXITCODE -ne 0)`
+alone was unsound: in a fresh step process the variable can be unset, and
+`exit $null` exits 0, so a step that never launched its suite would have
+reported green. Each step now refuses to report success when it cannot see a
+child exit code.
+
+Hosted CI immediately caught two defects that had been latent since W2/W3 and
+were invisible because those commits had never run through it:
+
+- The Windows ABI probe failed to link with `undefined reference to WSAPoll`.
+  W3 made the probe take that function's address to pin its declared signature,
+  which requires the symbol to resolve even though no socket is opened. The
+  ARM64 preview already linked the MSVC equivalent; the x86-64 step had no
+  matching flag. Fixed with a per-target matrix key.
+- The committed Darwin descriptor was missing `:ioctl-cmd-bytes`,
+  `:ioctl-arg-bytes`, and `:fionbio`. `28bde52` added those probe fields for W2
+  and regenerated the Linux and Windows evidence but not Darwin's, so every
+  fresh Darwin probe reported three fields the committed file lacked. The W1/W2
+  line fixed this in `7de096d`; this branch forked one commit earlier at
+  `5554d04` and never picked it up. Refreshed from the artifact a real macOS
+  arm64 runner produced at this revision.
+
+Windows ARM64 was deliberately **not** promoted. Its probe artifact is still
+unreviewed, no descriptor is committed, and none of these suites run there.
+
+Not taken from `7de096d`: its `src/jolt/net/target.clj` change relabelling the
+Linux aarch64 and Darwin x86-64 descriptors from `:inferred-from-*` to
+`:probed`, with the matching `target_test.clj` assertions. That is a production
+evidence-semantics change and is out of scope for a CI promotion.
+
 ## Task W6: downstream integration
 
 Only after W1-W5 are reviewed:

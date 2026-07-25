@@ -23,7 +23,7 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 |---|---|---|---|---|
 | Linux x86-64 | **probed** | **runtime** | **runtime** | The development and CI platform. Real `fcntl`, `poll`, pipe-wake, sliced byte I/O, EOF, non-blocking connect/`SO_ERROR`, mutation wake, and close races are exercised. |
 | Linux aarch64 | **probed** | **runtime** | **runtime** | The `ubuntu-24.04-arm` job diffs every freshly probed fact against the explicit x86-64 alias before running real sockets. Probe, blocking/non-blocking runtime, poller races, and required Hegel properties passed on revision `f0affc4` in CI run `30144054281`. |
-| Windows x86-64 | **probed** | **runtime** | **candidate** (byte I/O, connect, `WSAPoll` readiness, **and the public poller**) | W1 162/162, W2 56/56, W3 124/124, and the new W4 public-poller gate 73/73 all passed locally with observed exit code 0 on revision `38ff1db`, against native Chez 10.4.1 and the pinned Jolt fork `85f645aa`. The `WSAPOLLFD` layout, flag values, and `WSAPoll` signature are probed from real Windows headers and gated byte-for-byte by the drift job; a local MinGW re-run of `tools/probe-constants.c` on this revision showed no drift from the committed table. Readiness covers read, write, error, hangup/EOF, zero and positive timeouts, captured failure, readiness-driven connect completion, forced short reads, and stale generation/revision/removal token rejection. Task W4 added an owner-independent wake transport — a connected IPv4 loopback datagram pair, chosen because both ends are real `SOCKET`s and `WSAPoll` accepts nothing else — so `jolt.net/open-poller` now works here, `close!` is a completion boundary rather than a refusal, and blocking `accept` is readiness-driven. The W3 wake-less adapter is retained, and its refusals remain evidence for a poller built *without* a waker rather than for this transport. **Still candidate**: hosted Windows CI has not run this revision, and that promotion is task W5. |
+| Windows x86-64 | **probed** | **runtime** | **runtime** (byte I/O, connect, `WSAPoll` readiness, **and the public poller**) | Hosted Windows CI ran all four native gates on revision `0e66bcf` in [CI run 30169225227](https://github.com/casselc/jolt-net/actions/runs/30169225227): W1 162/162, W2 56/56, W3 124/124, and the W4 public-poller gate 73/73, each with a required observed child exit code of 0, against a source-built official Chez 10.4.1 and the pinned Jolt fork `85f645aa`. The same four counts had passed locally on `38ff1db` beforehand. The `WSAPOLLFD` layout, flag values, and `WSAPoll` signature are probed from real Windows headers and gated byte-for-byte by the drift job; a local MinGW re-run of `tools/probe-constants.c` on this revision showed no drift from the committed table. Readiness covers read, write, error, hangup/EOF, zero and positive timeouts, captured failure, readiness-driven connect completion, forced short reads, and stale generation/revision/removal token rejection. Task W4 added an owner-independent wake transport — a connected IPv4 loopback datagram pair, chosen because both ends are real `SOCKET`s and `WSAPoll` accepts nothing else — so `jolt.net/open-poller` now works here, `close!` is a completion boundary rather than a refusal, and blocking `accept` is readiness-driven. The W3 wake-less adapter is retained, and its refusals remain evidence for a poller built *without* a waker rather than for this transport. The gates carry no jolt-hegel alias and download no artifact, so a dependency-resolution failure cannot quietly erase this runtime coverage. |
 | Windows aarch64 | **preview artifact** | none | none | CI run `30144909720` built native `tarm64nt` Chez 10.4.1, executed the ABI probe with ARM64 MSVC, and passed direct source-mode target/fail-closed selection. The uploaded facts match Windows x86-64 after normalizing only CRLF and the architecture label, but no descriptor is committed yet. |
 | macOS arm64 | **probed** | **runtime** | **runtime** | The complete native suite passes with source-built Chez 10.4.1: variadic-ABI-correct `fcntl`, `poll(2)`, non-blocking connect/`SO_ERROR`, sliced byte I/O, SIGPIPE, close races, and the owner-independent self-pipe protocol, with Darwin's distinct 32-bit `nfds_t` binding. |
 | macOS x86-64 | **probed** | **runtime** | **runtime** | The live x86_64 probe is normalized only at the architecture label and diffed against the explicit shared-Darwin descriptor. Probe, full socket/poller runtime, source-built pinned libhegel, and required Hegel properties passed on revision `f0affc4` in CI run `30144054281`. |
@@ -207,14 +207,24 @@ The table test is non-vacuous: corrupting `AF_INET6` or swapping
 
 ## Making this better
 
-The remaining gaps are a green hosted result for the combined Windows
-*socket-runtime* gates and the Windows *readiness* backend. CI source-builds Chez
-and runs both W1 and W2 through direct PowerShell/Chez on Windows x86-64, with
-the child process exit code now mandatory. A non-gating native ARM64 preview
-produces the missing ABI artifact while proving unreviewed selection fails
-closed. Task W5 promotes the completed W1-W4 path after readiness and close
-lifecycle work; ARM64 cannot load descriptor-backed namespaces until its probe
-is reviewed and committed.
+Task W5 closed the Windows x86-64 gap. CI source-builds official Chez 10.4.1
+under MSYS2 MINGW64 and runs all four gates — W1, W2, W3, and the W4 public
+poller — through direct PowerShell/Chez on Windows x86-64. Every step must
+observe a real child process exit code: a step that cannot see one now fails
+rather than reporting green, because in a fresh step process `$LASTEXITCODE` can
+be unset and `exit $null` exits 0.
+
+The remaining Windows gap is **ARM64**. A non-gating native preview produces its
+ABI artifact and proves that unreviewed selection fails closed, but no
+descriptor is committed, so ARM64 cannot load descriptor-backed namespaces and
+none of the socket suites run there. It stays a preview artifact until that
+probe is reviewed into a descriptor and these same gates genuinely execute on
+it. Do not infer an ARM64 descriptor from the x86-64 one.
+
+Note also that ABI probing and socket-runtime evidence are separate claims. The
+probe job proves the numbers; it opens no socket. A table check, a cross-build,
+a namespace load, or a source-mode selection check is never evidence that a
+socket was opened.
 
 CI (`.github/workflows/ci.yml`) re-probes Linux x86_64, Linux aarch64, macOS
 arm64, macOS x86_64, and Windows x86_64 on each push. A separate preview
