@@ -302,6 +302,33 @@ Stop after W2 and return the evidence.
 
 Branch `claude/windows-wsapoll` from the reviewed, published combined W1/W2 tip.
 
+Status: implemented locally on `claude/windows-wsapoll`, branched from the
+reviewed combined tip `5554d04`. Native Windows x86-64 passed the new W3 WSAPoll
+gate 116/116, the W2 gate 56/56, and the W1 gate 162/162, all with no skips and
+an observed exit code of 0, against native Chez 10.4.1 and the pinned Jolt fork
+`85f645aa`. Linux passed the full Hegel-required suite 235/235 with no skips,
+the dependency-free W2 gate 53/53, and the dependency-free W1 gate 159/159 with
+its one not-applicable Winsock skip; the W3 alias correctly SKIPS on a non-Windows
+target rather than proving POSIX behavior under a Windows name. All 35 bounded
+models were run through a standalone z3 5.0.0 and matched their declared
+verdicts (13 unsat, 22 sat).
+
+The public Windows poller is deliberately still fail-closed. Without an
+owner-independent wake transport, explicit `wake!`, blocked-await cancellation,
+and terminal close against a blocked await cannot be implemented honestly, so
+they refuse rather than degrade, and W3's evidence comes from the internal
+`jolt.net.poller/open-readiness-adapter`. That adapter is not a second state
+machine: it is the same registration, token, snapshot, and stale-event code
+constructed with a nil wake transport. W4 supplies the transport and should
+promote the public poller.
+
+Two WSAPoll behaviors found by execution are worth carrying into W4. A peer FIN
+with no pending data reports `POLLHUP` alone rather than `POLLIN`, so a caller
+acting only on `:read` never sees EOF. An unrecognized handle fails the ENTIRE
+`WSAPoll` call with `WSAENOTSOCK` rather than marking one entry `POLLNVAL`,
+which makes the handle lease held across the native wait load-bearing on Windows
+in a way it is not on POSIX.
+
 Probe and commit `WSAPOLLFD` size, field widths/offsets, readiness flag values,
 `WSAPoll` signature, and timeout/error behavior from native Windows headers and
 execution. Add a Windows readiness adapter underneath the existing poller API;

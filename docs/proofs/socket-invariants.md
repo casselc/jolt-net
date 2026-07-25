@@ -510,6 +510,51 @@ native runtime test, and portable TCP contract are the appropriate evidence.
 
 ---
 
+## 6. Readiness dispatch is gated on the complete token, on every backend
+
+**Bounded claim.** A readiness snapshot is captured BEFORE the native wait, so
+by the time event bits are decoded the world may have moved: the registration
+may have been updated to a new revision, removed outright, or its descriptor
+number reused by a different socket under a new ownership generation. No decoded
+event is delivered unless its captured token still equals the registration's
+live token, compared whole. A current registration with genuine native readiness
+does remain deliverable, so this is not a deny-all rule.
+
+**Design and source anchor.** `jolt.net.poller/current-token?` is the single
+gate, and `jolt.net.poller/await-ready` applies it to every decoded entry after
+the native wait. Task W3 extracted it from the body of `await-ready` into a
+named function precisely so both the models and the Windows gate could anchor to
+one location. It is backend independent: `jolt.net.readiness` supplies the
+per-target struct layout, flag values, and native call -- POSIX `poll` over
+`struct pollfd`, Windows `WSAPoll` over `WSAPOLLFD` -- but neither backend may
+dispatch an event this gate rejects.
+
+**Models.** `readiness-generation-mismatch.smt2` and
+`readiness-revision-mismatch.smt2` are `unsat` for the two supersession arms;
+`readiness-removed-registration.smt2` is `unsat` for the removal arm;
+`readiness-current-token-nonvacuity.smt2` is `sat`, ruling out a vacuous
+deny-all reading. `readiness-stale-dispatch-buggy.smt2` deletes exactly the
+token comparison and is `sat`, which is what makes the three `unsat` results
+non-trivial rather than an artifact of over-constrained premises.
+
+**Executable control.** `test/jolt/net/poller_test.clj` covers the POSIX
+backend. `test/jolt/net/wsapoll_test_main.clj` covers Windows over real
+`WSAPoll`: it registers a genuinely readable socket, requires the current token
+to be delivered with real `:read` readiness, then requires the superseded,
+removed, and closed-generation tokens all to fail `current-token?` and never
+appear in a dispatch.
+
+**What this does NOT claim.** Dispatch only. It says nothing about interrupting
+a native wait already in progress. On Windows there is no wake transport until
+task W4, so an acknowledged mutation is visible to the NEXT await rather than to
+one already parked in `WSAPoll`; that is why the public Windows poller stays
+fail-closed and W3's evidence comes from an internal adapter whose awaits are
+sequential. Nor does it claim anything about Winsock's own event semantics --
+those are trusted OS premises, pinned by the probe and by the native gate, not
+by these models.
+
+---
+
 ## What is deliberately not modelled
 
 - **Resolver copy-before-free.** This is a memory-lifetime property, and the
@@ -536,6 +581,14 @@ native runtime test, and portable TCP contract are the appropriate evidence.
   verify remaining-deadline recomputation and expiry without scheduler timing.
   A subprocess writes after peer close and must report a structured reset
   instead of dying from SIGPIPE.
+- **Winsock event semantics.** `WSAPoll`'s own behavior is an OS premise, not
+  something these models establish. The divergences from POSIX `poll` that
+  actually bite are recorded in `docs/PLATFORM-COVERAGE.md` and asserted by the
+  native W3 gate: a FIN with no pending data raises `POLLHUP` alone rather than
+  `POLLIN`, an unrecognized handle fails the whole call with `WSAENOTSOCK`
+  rather than marking one entry `POLLNVAL`, and a refused connect surfaces as
+  `POLLWRNORM|POLLERR|POLLHUP` only once the refusal lands. Real sockets on a
+  real Windows runner are the evidence for each of those, not SMT.
 - **Unbounded poller concurrency.** The wake models cover one candidate writer
   or producer and the critical bounded close or drain/reset ordering. They do
   not quantify over an unbounded number of producers, repeated epochs, scheduler

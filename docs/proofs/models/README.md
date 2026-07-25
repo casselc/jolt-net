@@ -41,6 +41,22 @@ contract trios, bringing the directory to 33 files. On 2026-07-24 Chiasmus
 re-ran all six affected files: both `-corrected` models were `unsat`, and both
 `-buggy` plus both `-nonvacuity` controls were `sat`.
 
+Task W3 (`WSAPoll` readiness) added two files, bringing the directory to 35:
+`readiness-removed-registration.smt2` and `readiness-stale-dispatch-buggy.smt2`.
+The readiness family previously had two corrected models and a non-vacuity
+control but NO buggy control, so its `unsat` results were not yet demonstrably
+non-trivial; the new buggy control deletes exactly the token comparison and
+shows the stale dispatch becomes reachable.
+
+On 2026-07-25 all 35 files were run through a standalone `z3` 5.0.0, installed
+into a throwaway directory and invoked exactly as the shell example above. Every
+file matched its declared verdict: 13 `unsat` and 22 `sat`. The three
+pre-existing readiness models had their source anchors updated in the same task,
+because W3 moved the complete-token comparison out of the body of
+`jolt.net.poller/await-ready` into the named, separately callable
+`jolt.net.poller/current-token?`. That is a relocation of the anchor, not a
+change to what is claimed.
+
 ## Expected results
 
 | Model | Expected | Essential witness or unsat core |
@@ -57,6 +73,8 @@ re-ran all six affected files: both `-corrected` models were `unsat`, and both
 | `readiness-generation-mismatch.smt2` | `unsat` | generation mismatch conflicts with complete-token dispatch |
 | `readiness-revision-mismatch.smt2` | `unsat` | revision mismatch conflicts with complete-token dispatch |
 | `readiness-current-token-nonvacuity.smt2` | `sat` | fd `8`, generation `10`, revision `3`, dispatch allowed |
+| `readiness-removed-registration.smt2` | `unsat` | `registration_removed_before_decode`, `dispatch_iff_present_and_token_matches`, `violation_iff_removed_registration_is_dispatched`, `property_violated` |
+| `readiness-stale-dispatch-buggy.smt2` | `sat` | descriptor `8` reused; generation `9 -> 10` and revision `3 -> 4` both dispatched because the token comparison is omitted |
 | `posix-nonblocking-transition-buggy.smt2` | `sat` | Apple arm64 witness: fixed declaration, successful return, absent bit, marked handle, blocking-capable admission |
 | `posix-nonblocking-transition-corrected.smt2` | `unsat` | variadic declaration plus per-handle `F_GETFL` read-back exclude both POSIX violation branches |
 | `posix-nonblocking-transition-nonvacuity.smt2` | `sat` | observed bit, marked handle, and useful short operation |
@@ -184,9 +202,22 @@ interleaving tests supply the semantic oracle:
   by these bounded models.
 - `jolt.net.handle/acquire!`, `release!`, and `close!` implement the
   open/admit, drain, and native-close transitions used by the lease models.
-- `jolt.net.poller/await-ready` compares the complete captured registration
-  token with the current token after native poll, corresponding to the
-  generation and revision models.
+- `jolt.net.poller/current-token?` compares the complete captured registration
+  token with the current token, and `jolt.net.poller/await-ready` applies it to
+  every decoded entry after the native wait. That single function corresponds to
+  the generation, revision, removal, and stale-dispatch models. It is backend
+  independent: `jolt.net.readiness` supplies the native wait and the event
+  normalization for POSIX `poll` and Windows `WSAPoll` alike, but neither
+  backend may dispatch an event this gate rejects, so the readiness models are
+  not per-platform claims.
+- `jolt.net.readiness/backend` selects the per-target struct layout, flag
+  values, and captured-call op from the probed descriptor. The readiness models
+  say nothing about which native call ran; the Windows W3 gate
+  (`test/jolt/net/wsapoll_test_main.clj`) is the runtime oracle that real
+  `WSAPoll` events reach that gate and that stale tokens are rejected there.
+  Note the boundary these models do NOT cross: nothing here claims a mutation
+  can interrupt a native wait already in progress. On Windows there is no wake
+  transport until task W4, so removal and update invalidate DISPATCH only.
 - `jolt.net.ffi/p-fcntl` declares `{:varargs-after 2}`, and
   `jolt.net.nonblocking/set-raw!` reads `F_GETFL` back before any handle is
   marked. `test/jolt/net/poller_test.clj` independently observes the bit on a

@@ -1,8 +1,10 @@
 ; Claim: an acknowledged interest update invalidates an older native readiness
 ; snapshot even when the fd and ownership generation are unchanged.
 ;
-; The source-side oracle is jolt.net.poller/await-ready's complete-token
-; comparison after it drains acknowledged mutations.
+; The source-side oracle is jolt.net.poller/current-token?, applied by
+; jolt.net.poller/await-ready to every decoded entry after it drains
+; acknowledged mutations. Both readiness backends -- POSIX poll and Windows
+; WSAPoll -- funnel through that one function, so the claim is not per-platform.
 ;
 ; Expected: unsat. The queried violation requires dispatch of snapshot revision
 ; 2 after current revision advanced to 3.

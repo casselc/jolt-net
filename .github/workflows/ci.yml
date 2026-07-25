@@ -12,14 +12,15 @@
 #           means checking out an exact casselc/jolt revision and building a
 #           matching Chez Scheme.
 #
-# Windows x86_64 has native W1/W2 gates for blocking sockets, FIONBIO, byte I/O,
-# and connect completion. They deliberately exclude the still-POSIX readiness
-# backend and the alias-scoped Hegel dependency so a result cannot be confused
-# with a dependency-resolution or WSAPoll result. The ARM64 preview compiles and
-# runs the ABI probe with native MSVC; until that evidence becomes a committed
-# descriptor, source Jolt must identify the host and jolt-net must fail closed.
-# Neither Windows lane yet claims readiness runtime coverage.
-# docs/PLATFORM-COVERAGE.md says the same.
+# Windows x86_64 has native W1/W2/W3 gates: blocking sockets, FIONBIO, byte I/O,
+# connect completion, and real WSAPoll readiness. All three deliberately exclude
+# the alias-scoped Hegel dependency so a result cannot be confused with a
+# dependency-resolution result. What Windows still lacks is a wake transport
+# (task W4), so the PUBLIC poller there remains fail-closed and the W3 gate
+# drives an internal wake-less adapter over the same token machinery. The ARM64
+# preview compiles and runs the ABI probe with native MSVC; until that evidence
+# becomes a committed descriptor, source Jolt must identify the host and
+# jolt-net must fail closed. docs/PLATFORM-COVERAGE.md says the same.
 
 name: ci
 
@@ -365,13 +366,16 @@ jobs:
           path: jolt-net/tools/probed/*.edn
 
   # W1 and W2 cover the blocking substrate plus non-blocking transitions, byte
-  # I/O, and connect completion. They deliberately exclude the readiness
-  # backend. Run both dependency-free native suites through direct
-  # PowerShell/Chez: no /dev/stdin, bash wrapper, Hegel dependency, or WSAPoll.
+  # I/O, and connect completion. W3 adds the real WSAPoll readiness backend and
+  # the shared token machinery over it. What is still absent is the WAKE and
+  # close lifecycle (task W4), so the public Windows poller remains fail-closed
+  # and the W3 suite drives the internal wake-less adapter. Run all three
+  # dependency-free native suites through direct PowerShell/Chez: no
+  # /dev/stdin, bash wrapper, or Hegel dependency.
   windows-portable:
-    name: Winsock W1/W2 runtime (Windows x86_64; no readiness backend)
+    name: Winsock W1/W2/W3 runtime (Windows x86_64; no wake transport)
     runs-on: windows-2022
-    timeout-minutes: 25
+    timeout-minutes: 35
     defaults:
       run:
         shell: msys2 {0}
@@ -452,6 +456,21 @@ jobs:
             -RuntimePath "$env:GITHUB_WORKSPACE\jolt-upstream" `
             -ChezExe "$env:GITHUB_WORKSPACE\chez-install\bin\scheme.exe" `
             -TimeoutSeconds 90
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Task W3. Real WSAPoll over real Winsock handles, including the shared
+      # registration/token machinery driven through the internal wake-less
+      # adapter. The timeout is larger than the W1/W2 gates because a refused
+      # loopback connect takes roughly 2.5 s to become error-ready and the suite
+      # waits on several such real events rather than sleeping past them.
+      - name: Run dependency-free native WSAPoll readiness suite
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\test-windows-wsapoll.ps1" `
+            -JoltNetPath "$env:GITHUB_WORKSPACE" `
+            -RuntimePath "$env:GITHUB_WORKSPACE\jolt-upstream" `
+            -ChezExe "$env:GITHUB_WORKSPACE\chez-install\bin\scheme.exe" `
+            -TimeoutSeconds 240
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   # Public-preview evidence lane. The runner image also contains an x86_64
