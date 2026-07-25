@@ -23,8 +23,8 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 |---|---|---|---|---|
 | Linux x86-64 | **probed** | **runtime** | **runtime** | The development and CI platform. Real `fcntl`, `poll`, pipe-wake, sliced byte I/O, EOF, non-blocking connect/`SO_ERROR`, mutation wake, and close races are exercised. |
 | Linux aarch64 | **probed** | **runtime** | **runtime** | The `ubuntu-24.04-arm` job diffs every freshly probed fact against the explicit x86-64 alias before running real sockets. Probe, blocking/non-blocking runtime, poller races, and required Hegel properties passed on revision `f0affc4` in CI run `30144054281`. |
-| Windows x86-64 | **probed** | **candidate** | none | A native hosted W1 gate is configured to run the dependency-free blocking Winsock suite directly through PowerShell and Chez. The same suite has made real local calls for initialization, IPv4/IPv6 loopback listen/connect/accept, port-zero, endpoint inspection, exact refused-connect and duplicate-bind errors, and idempotent close. Keep this row at candidate until the corrected hosted gate is observed green on the exact revision. |
-| Windows aarch64 | **preview artifact** | none | none | CI run `30144054281` built native `tarm64nt` Chez 10.4.1 and executed the ABI probe with ARM64 MSVC. The uploaded facts match Windows x86-64 after normalizing only CRLF and the architecture label, but no descriptor is committed yet: the corrected source-mode lane must prove target selection and fail-closed behavior before that evidence is admitted. |
+| Windows x86-64 | **probed** | **runtime** | **candidate** (byte I/O + connect only; **no poller**) | Hosted W1 printed 149/149 on revision `9443697` in CI run `30144909720`, but its PowerShell process-status path was later found to report exit 0 even when the child failed. The repaired local runner passed W2 55/55 plus W1 155/155 on code revision `2cbd988`. The combined hosted job now runs both direct PowerShell/Chez gates with a required observed exit code. `WSAPoll` and the wake/close lifecycle remain W3/W4, so `open-poller` and everything built on it still fail closed. Keep non-blocking coverage at candidate until the combined exact revision is green in CI. |
+| Windows aarch64 | **preview artifact** | none | none | CI run `30144909720` built native `tarm64nt` Chez 10.4.1, executed the ABI probe with ARM64 MSVC, and passed direct source-mode target/fail-closed selection. The uploaded facts match Windows x86-64 after normalizing only CRLF and the architecture label, but no descriptor is committed yet. |
 | macOS arm64 | **probed** | **runtime** | **runtime** | The complete native suite passes with source-built Chez 10.4.1: variadic-ABI-correct `fcntl`, `poll(2)`, non-blocking connect/`SO_ERROR`, sliced byte I/O, SIGPIPE, close races, and the owner-independent self-pipe protocol, with Darwin's distinct 32-bit `nfds_t` binding. |
 | macOS x86-64 | **probed** | **runtime** | **runtime** | The live x86_64 probe is normalized only at the architecture label and diffed against the explicit shared-Darwin descriptor. Probe, full socket/poller runtime, source-built pinned libhegel, and required Hegel properties passed on revision `f0affc4` in CI run `30144054281`. |
 
@@ -64,11 +64,40 @@ Do not summarize this file as "supports Linux, macOS and Windows."
   `cl.exe` only after selecting the MSVC `x64_arm64` environment and rejects
   probe output without `:arch :aarch64`. The resulting artifact is evidence to
   review, not permission to infer a descriptor from Windows x86-64.
-- **Windows readiness** still needs `ioctlsocket(FIONBIO)`, `WSAPoll`, and a
-  tested owner-independent wake transport such as a loopback UDP pair. The
-  non-blocking connect API fails closed before resolution or socket creation on
-  Windows until that backend and real `getsockopt(SO_ERROR)` calls are verified.
-  This is unchanged by task W1, which is scoped to the blocking socket base only.
+- **Windows non-blocking transitions and byte I/O are now exercised on a real
+  Windows machine** (task W2, `docs/WINDOWS-RUNTIME-SEQUENCE.md`). `FIONBIO`
+  and the widths of `ioctlsocket`'s `long` command and `u_long` argument are
+  read from the platform headers, not assumed: both are **32 bits even on
+  Win64**, unlike the pointer-width socket handle. Treating the argument cell as
+  pointer-width would misdescribe the ABI and rely on incidental low-byte
+  layout, so unsupported widths fail closed. `FIONBIO` is
+  `_IOW('f', 126, u_long)` = `0x8004667E`, which does not fit a signed 32-bit
+  int; the committed table carries the signed `long` the ABI actually passes.
+- **Windows has no getter for a socket's blocking mode**, so the `F_GETFL`
+  read-back that guards the POSIX transition has no counterpart. jolt-net does
+  not invent one. Production marks the handle only after `ioctlsocket` returns
+  successfully under the probed ABI and documented Winsock FIONBIO contract.
+  The native gate supplies cross-boundary conformance evidence:
+  `try-accept` with no pending client and a read with no pending data must return
+  `::would-block` as a value, which a blocking descriptor could not do without
+  parking the thread and tripping the suite watchdog. That observation happens
+  after marking; it is not an in-process guard or proof for every future handle.
+  `jolt.net.nonblocking/postcondition-kind` names the in-process boundary. See
+  `docs/proofs/socket-invariants.md` and the separate
+  `docs/proofs/models/{posix-nonblocking-transition,windows-nonblocking-contract}-*.smt2`
+  model families.
+- **Windows readiness is still absent.** `WSAPoll` (task W3) and an
+  owner-independent wake and close lifecycle (task W4) are not implemented, so
+  no poller exists on Windows and `accept` there remains the native blocking
+  call. A Windows caller can initiate `try-connect` and complete it with
+  `finish-connect!`, but must supply its own readiness wait in between; W3 owns
+  the readiness-driven native integration and its evidence. A listener switched
+  to non-blocking mode by `try-accept` cannot use Windows's native blocking
+  accept afterward; `accept` now fails explicitly with
+  `:jolt.net/requires :windows-readiness` instead of violating its blocking
+  contract. This is a sequential guard: concurrent `accept` and `try-accept` on
+  one Windows listener remain unsupported until mode/admission is atomic. W3
+  owns the readiness-driven replacement.
 - **macOS runtime evidence.** The earlier gate showed that a typed
   three-argument signature is not enough for variadic `fcntl` on Apple arm64:
   the third argument uses the variadic stack ABI. The core binding now declares
@@ -134,13 +163,13 @@ The table test is non-vacuous: corrupting `AF_INET6` or swapping
 
 ## Making this better
 
-The remaining gap is hosted Windows *socket-runtime* coverage. CI source-builds Chez
-and runs Jolt on Windows x86-64, and a non-gating native ARM64 preview produces
-the missing ABI artifact while proving unreviewed selection fails closed. The
-x86-64 hosted job intentionally stops at portable target/address checks while
-W1 is a locally validated candidate; task W5 promotes the PowerShell
-socket suite to hosted evidence after W2-W4 complete the portable readiness and
-close lifecycle. ARM64 cannot load descriptor-backed namespaces until its probe
+The remaining gaps are a green hosted result for the combined Windows
+*socket-runtime* gates and the Windows *readiness* backend. CI source-builds Chez
+and runs both W1 and W2 through direct PowerShell/Chez on Windows x86-64, with
+the child process exit code now mandatory. A non-gating native ARM64 preview
+produces the missing ABI artifact while proving unreviewed selection fails
+closed. Task W5 promotes the completed W1-W4 path after readiness and close
+lifecycle work; ARM64 cannot load descriptor-backed namespaces until its probe
 is reviewed and committed.
 
 CI (`.github/workflows/ci.yml`) re-probes Linux x86_64, Linux aarch64, macOS

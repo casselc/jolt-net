@@ -105,6 +105,29 @@
   {:blocking true :capture-native-error true})
 (ffi/defcfn w-send-with-error "send" [:uptr :pointer :int :int] :int
   {:blocking true :capture-native-error true})
+;; Winsock non-blocking surface. Same C entry points as the blocking bindings
+;; above, declared separately WITHOUT :blocking: once the handle is in FIONBIO
+;; mode these return immediately, and parking them on a __collect_safe boundary
+;; would buy nothing while widening the window in which the runtime may move
+;; the payload array behind a pinned interior pointer.
+(ffi/defcfn w-try-accept-with-error "accept" [:uptr :pointer :pointer] :uptr
+  {:capture-native-error true})
+(ffi/defcfn w-try-connect-with-error "connect" [:uptr :pointer :int] :int
+  {:capture-native-error true})
+(ffi/defcfn w-try-recv-with-error "recv" [:uptr :pointer :int :int] :int
+  {:capture-native-error true})
+(ffi/defcfn w-try-send-with-error "send" [:uptr :pointer :int :int] :int
+  {:capture-native-error true})
+;; getsockopt's optlen is an in/out int* here, not socklen_t*.
+(ffi/defcfn w-getsockopt-with-error "getsockopt"
+  [:uptr :int :int :pointer :pointer] :int
+  {:capture-native-error true})
+;; int ioctlsocket(SOCKET s, long cmd, u_long *argp). `cmd` is :int because a
+;; Windows long is 32 bits even on Win64 (probed: :ioctl-cmd-bytes 4) -- passing
+;; it as a pointer-width type would misplace the argument. FIONBIO itself is
+;; negative when read as a signed long; see jolt.net.target.
+(ffi/defcfn w-ioctlsocket-with-error "ioctlsocket" [:uptr :int :pointer] :int
+  {:capture-native-error true})
 (ffi/defcfn w-wsastartup  "WSAStartup"  [:uint16 :pointer] :int)
 
 ;; --- resolver (same signature on both) --------------------------------------
@@ -147,13 +170,22 @@
      :bind w-bind-with-error
      :listen w-listen-with-error
      :accept w-accept-with-error
+     :try-accept w-try-accept-with-error
      :connect w-connect-with-error
+     :try-connect w-try-connect-with-error
      :shutdown w-shutdown-with-error
      :getsockname w-getsockname-with-error
      :getpeername w-getpeername-with-error
      :setsockopt w-setsockopt-with-error
+     :getsockopt w-getsockopt-with-error
      :recv w-recv-with-error
      :send w-send-with-error
+     :try-recv w-try-recv-with-error
+     :try-send w-try-send-with-error
+     ;; the Windows counterpart of POSIX :fcntl; there is deliberately no
+     ;; :ioctlsocket entry on POSIX, so a mis-selected transition fails closed
+     ;; at invoke-captured rather than calling something plausible
+     :ioctlsocket w-ioctlsocket-with-error
      :getaddrinfo c-getaddrinfo-with-error}
     {:socket p-socket-with-error
      :bind p-bind-with-error

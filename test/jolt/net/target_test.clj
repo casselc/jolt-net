@@ -75,6 +75,14 @@
                  (:socklen-bytes probe) (socklen-bytes d))
         (c/check (str label ": nfds_t width matches")
                  (:nfds-bytes probe) (nfds-bytes d))
+        ;; Winsock-only, and deliberately compared on every platform: the
+        ;; interesting assertion on POSIX is that these stay absent, and on
+        ;; Win64 that neither is pointer-width despite every other handle-ish
+        ;; type there being 8 bytes.
+        (c/check (str label ": ioctlsocket command width matches")
+                 (:ioctl-cmd-bytes probe) (:ioctl-cmd-bytes d))
+        (c/check (str label ": ioctlsocket argument width matches")
+                 (:ioctl-arg-bytes probe) (:ioctl-arg-bytes d))
         (c/check (str label ": errno codes match") {} (diff-map (:errno probe) (:errno d)))
         (c/check (str label ": EAI_* codes match") {} (diff-map (:gai probe) (:gai d)))))))
 

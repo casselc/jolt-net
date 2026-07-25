@@ -486,38 +486,41 @@
 
   (let [base (net/open-poller)
         waits (atom [])
+        now (atom 0)
         eintr (get-in (net/target-descriptor) [:errno :eintr])
         p (assoc base
+                 :jolt.net/monotonic-nanos #(deref now)
                  :jolt.net/poll-call
                  (fn [_ _ wait-ms]
                    (let [calls (swap! waits conj wait-ms)]
                      (if (= 1 (count calls))
                        (do
-                         (Thread/sleep 60)
+                         (reset! now 60000000)
                          {:result -1 :code eintr})
                        (do
-                         (Thread/sleep wait-ms)
+                         (reset! now 120000000)
                          {:result 0})))))]
     (try
       (c/check "EINTR retry preserves the await result"
                [] (net/await-ready p 120))
       (c/check-pred "EINTR retry uses the remaining absolute deadline"
                     (fn [observed]
-                      (and (<= 2 (count observed))
-                           (< (apply max (rest observed))
-                              (first observed))))
+                      (= [120 60] observed))
                     @waits)
       (finally (net/close! p))))
 
   (let [base (net/open-poller)
         calls (atom 0)
+        now (atom 0)
         eintr (get-in (net/target-descriptor) [:errno :eintr])
         p (assoc base
+                 :jolt.net/monotonic-nanos #(deref now)
                  :jolt.net/poll-call
                  (fn [_ _ _]
                    (swap! calls inc)
-                   ;; Cross the caller's absolute deadline inside poll(2).
-                   (Thread/sleep 20)
+                   ;; Cross the caller's absolute deadline inside poll(2),
+                   ;; without depending on scheduler timing.
+                   (reset! now 2000000)
                    {:result -1 :code eintr}))]
     (try
       (c/check "deadline-expired EINTR is an empty timeout"

@@ -19,9 +19,9 @@ As of 2026-07-24:
 - `D:\src\jolt-proposal-net-runtime` began as a detached worktree of the
   proposal fork at `9dc88108`, with its submodules initialized. W1 must now be
   validated against `casselc/jolt` branch
-  `codex/upstream-improvements-6-8` at `e749f154` or later. That revision adds
+  `codex/upstream-improvements-6-8` at `85f645aa` or later. That revision includes
   atomic native-error capture to the target, monotonic-clock, byte-slice, and
-  FFI primitives jolt-net already used.
+  FFI primitives jolt-net uses, plus the reviewed Windows build/provider fixes.
 - Native Chez 10.4.1 is
   `D:\chez-10.4.1\bin\scheme.exe`.
 - Native Windows Git is
@@ -207,14 +207,31 @@ Stop after W1 and return the evidence. Do not begin W2.
 Branch `claude/windows-nonblocking-io` from reviewed W1
 `f0affc4fa80ac00313860789cc8b894564ecc3b1`.
 
+Status: accepted locally at revision `2cbd988`, branched from `8a5b3dd` (the
+docs-only descendant of the reviewed W1 commit that clarified this task's
+`ioctlsocket` acceptance bullet). Native Windows x86-64 passed the W2 gate
+55/55 and the W1 blocking gate 155/155, both with no skips. Linux passed the
+full Hegel-required gate 228/228 with no skips, the dependency-free W2 gate
+53/53 with no skips, and the dependency-free W1 gate 152/152 with its one
+not-applicable Winsock skip. All 31 bounded models were run through a standalone
+z3 5.0.0 and matched their declared verdicts, but independent source/model
+review found the generic Windows transition model stronger than production.
+The combined W1/W2 branch now splits POSIX read-back from the conditional
+Windows contract, bringing the directory to 33 models; Chiasmus rechecked all
+six affected files with the expected verdicts. W3 must branch from the reviewed
+combined tip so it inherits that correction and the later W1/macOS CI repairs,
+not directly from `2cbd988`.
+
 Implement and probe `ioctlsocket(FIONBIO)`, Windows nonblocking accept/connect,
 `recv`, `send`, and `getsockopt(SO_ERROR)`. Preserve the existing value contract
 for would-block, EOF, in-progress, and connected states. Add real partial-slice,
 EOF, half-close, refused-connect, ownership-after-failed-completion, and
 capture-before-cleanup tests. Every failure-sensitive native call must consume
 an explicit captured result; a separate post-call last-error read is not an
-acceptable Windows implementation. Extend the nonblocking-transition proof so
-the postcondition is platform-neutral. Do not add a poller in this task.
+acceptable Windows implementation. Record the honest cross-platform boundary:
+POSIX has a per-handle read-back proof; Windows trusts probed ABI facts plus the
+documented FIONBIO contract and uses later would-block behavior as conformance
+evidence. Do not add a poller in this task.
 
 Add a dependency-free Windows W2 test main and direct PowerShell runner rather
 than loading the POSIX poller suite or invoking a bash wrapper. From WSL, invoke
@@ -238,7 +255,9 @@ Acceptance:
 
 - `ioctlsocket(FIONBIO)` and the width of its `u_long` argument are probed from
   Windows headers; production marks the handle only after a successful return,
-  and native behavior tests prove that accept/read then report would-block.
+  and native behavior tests establish cross-boundary conformance by observing
+  accept/read report would-block. Those observations occur after marking and
+  are not represented as an in-process guard.
   Do not invent a nonexistent portable getter for Windows nonblocking mode;
 - accept/read before readiness return `would-block`, zero-length read alone
   returns zero, and peer half-close returns EOF;
@@ -251,21 +270,82 @@ Acceptance:
   each binding;
 - the native dependency-free W2 gate and the complete Hegel-required Linux
   suite pass under watchdogs; and
-- the proof/model trio, source anchors, platform evidence, branch commits, and
-  clean status are recorded.
+- the separate POSIX and Windows proof/model trios, source anchors, platform
+  evidence, branch commits, and clean status are recorded.
+
+### Evidence boundary handed to W3
+
+- There is **no readiness backend on Windows**. `try-connect` initiates and
+  `finish-connect!` completes, but nothing in production waits between them.
+  The W2 gate closes that gap only with test-local coordination: a server's
+  blocking `accept` as a real synchronization point where one exists, and
+  otherwise a bounded wait for a terminal VALUE whose exhaustion fails the
+  assertion. W3 owns the readiness-driven native integration and its evidence.
+- A listener switched to non-blocking mode by `try-accept` cannot safely re-enter
+  the Windows native blocking-accept path. W2 now rejects that mixed state with
+  `:jolt.net/requires :windows-readiness` instead of returning would-block from
+  an API that promises to block. This is a sequential check, not an atomic
+  mode/admission gate: concurrent `accept` and `try-accept` on one Windows
+  listener remain unsupported. W3 owns the readiness-driven replacement.
+- Successful `ioctlsocket(FIONBIO)` under the probed ABI and documented Winsock
+  contract is the in-process mark boundary. The later would-block gate is
+  conformance evidence. `WSAPoll` does not become a blocking-mode getter, so W3
+  must not use readiness to resurrect the rejected generic proof.
+- The two Windows runners were exiting 0 unconditionally before this task, so
+  any earlier "green" from them was the suite's printed text rather than a
+  process exit code. Both are fixed here; treat pre-W2 runner exit codes as
+  uninformative.
 
 Stop after W2 and return the evidence.
 
 ## Task W3: `WSAPoll` readiness backend
 
-Branch from reviewed W2: `claude/windows-wsapoll`
+Branch `claude/windows-wsapoll` from the reviewed, published combined W1/W2 tip.
 
-Probe and commit `WSAPOLLFD` widths, offsets, flags, and timeout behavior. Add a
-Windows readiness adapter without changing the public poller API. Preserve
-generation-bearing, revision-bearing tokens and stale-event rejection. Exercise
-read, write, error, hangup, timeouts, interrupted/retried waits where applicable,
-registration updates, removal, and nonblocking-connect completion. Do not
-implement a wake transport or claim close-cancellation completion yet.
+Probe and commit `WSAPOLLFD` size, field widths/offsets, readiness flag values,
+`WSAPoll` signature, and timeout/error behavior from native Windows headers and
+execution. Add a Windows readiness adapter underneath the existing poller API;
+do not fork a second registration/token state machine. The shared layer must
+continue to own generation-bearing and revision-bearing tokens, complete-token
+validation after the native wait, stale-event rejection, event normalization,
+one caller-owned absolute monotonic deadline, and captured native errors.
+
+W3 is the readiness slice, not the wake/close slice. Factor the backend seam and
+exercise real `WSAPoll` without weakening existing mutation acknowledgement,
+explicit `wake!`, or close-completion contracts. If those public lifecycle
+operations cannot be implemented honestly without a Windows wake transport,
+keep the public Windows poller fail-closed for them and test the internal
+readiness adapter directly; W4 will wire the owner-independent wake transport.
+Do not emulate a wake with sleeps, invent a blocking-mode getter, or claim that
+finite polling is cancellation completion.
+
+Acceptance:
+
+- native `WSAPOLLFD` probe output is committed and the descriptor drift gate
+  checks it byte-for-byte after line-ending normalization;
+- real Windows sockets cover read, write, error, hangup/EOF, zero timeout,
+  positive timeout, and captured failure behavior, with exact event
+  normalization documented where Winsock differs from POSIX;
+- a registration update/removal that invalidates a captured snapshot cannot
+  dispatch its stale generation/revision token; current-token readiness remains
+  non-vacuously deliverable;
+- a real in-progress connect is awaited for write/error/hangup readiness and
+  only `finish-connect!`/`SO_ERROR` decides success or the exact refused code;
+- the interim W2 failure for blocking `accept` on an already non-blocking
+  Windows listener is either replaced by a readiness-driven implementation with
+  an honest lifecycle, or retained explicitly—never silently converted into
+  would-block; concurrent blocking/nonblocking accept admission remains
+  explicitly unsupported unless W3 makes it atomic;
+- at least one real short read is forced by sending fewer bytes than requested
+  after readiness; offset/count preservation and partial-progress composition
+  remain green;
+- Windows W1, W2, and W3 dependency-free gates, Linux full Hegel-required tests,
+  and all affected proof/model controls pass under watchdogs;
+- proofs/docs distinguish the WSAPoll adapter's proven token/event invariants
+  from the W4 wake, blocked-await cancellation, and close-completion obligations;
+  and
+- the branch is committed and clean, with exact commands/results reported and
+  no push or PR unless explicitly authorized.
 
 Stop after W3 and return the evidence.
 

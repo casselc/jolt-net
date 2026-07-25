@@ -277,24 +277,71 @@ to Chez's `(__varargs_after 2)` convention. jolt-net additionally reads
 the corrected ABI declaration: it makes a future compiler, libc, or binding
 regression fail closed before any short lease is admitted.
 
-- `nonblocking-transition-buggy.smt2` is **sat**: fixed-arity declaration,
-  apparent `F_SETFL` success, absent `O_NONBLOCK`, marked handle, and a
-  blocking-capable accept are all present in one witness.
-- `nonblocking-transition-corrected.smt2` makes both violation branches
-  **unsat**: the Apple-arm64 declaration has the explicit boundary, and
-  admission without the observed bit contradicts the mark postcondition. The
-  solver leaves `nonblocking_observed` unconstrained, so this is a fail-closed
-  safety result rather than an assumption that the syscall must work.
-- `nonblocking-transition-nonvacuity.smt2` is **sat** when read-back observes
-  the bit; the handle is marked and a useful short operation is admitted.
+Task W2 added Windows, but the two targets do **not** provide equivalent proof
+boundaries. Winsock reaches non-blocking mode through
+`ioctlsocket(FIONBIO)` and exposes no portable getter for a socket's blocking
+mode. Inventing a substitute getter by making a speculative socket call would
+be a worse oracle: it can consume input, accept a connection, or say nothing
+when data is already ready.
+
+An adversarial review caught the first W2 model overstating production. It made
+the Windows handle mark depend on a later would-block observation, while the
+code correctly marks immediately after successful `ioctlsocket`. The proof is
+now split at the real trusted boundary:
+
+| Target | In-process mark boundary | What is proved or assumed |
+|---|---|---|
+| POSIX | successful `F_SETFL` plus `F_GETFL` observing `O_NONBLOCK` | Per-handle fail-closed guard; the bit remains unconstrained in the model and an absent bit prevents marking. |
+| Windows | successful `ioctlsocket(FIONBIO)` | Conditional on the header-matching binding, exact command representation, a fully initialized nonzero `u_long` at `argp`, and documented Winsock semantics. Later would-block tests are cross-boundary conformance evidence, not an admission guard. |
+
+`jolt.net.nonblocking/postcondition-kind` names the in-process boundary. It
+does not claim that Windows has gained an observable per-handle postcondition.
+
+- `posix-nonblocking-transition-buggy.smt2` is **sat** for the original Apple
+  arm64 witness: fixed-arity declaration, apparent `F_SETFL` success, absent
+  `O_NONBLOCK`, marked handle, and blocking-capable admission.
+- `posix-nonblocking-transition-corrected.smt2` is **unsat** while
+  `nonblocking_observed` stays unconstrained: the variadic declaration and
+  read-back prevent a handle without the bit from being marked.
+- `posix-nonblocking-transition-nonvacuity.smt2` is **sat** with the bit
+  observed and a useful short operation admitted.
+- `windows-nonblocking-contract-buggy.smt2` is **sat** when the `u_long` at
+  `argp` contains zero: the valid FIONBIO call requests blocking mode and can
+  return success, after which the apparent successful-return mark admits a
+  still-blocking socket. Marking on return is the production ordering; the
+  wrong requested value, not that ordering, creates this witness.
+- `windows-nonblocking-contract-corrected.smt2` is **unsat**, explicitly
+  conditional on `binding_matches_ioctlsocket_header`,
+  `command_argument_has_probed_long_width_and_fionbio_bits`,
+  `argp_contains_fully_initialized_nonzero_u_long`, and
+  `trusted_winsock_fionbio_semantics`. The model does not pretend to prove the
+  operating-system contract.
+- `windows-nonblocking-contract-nonvacuity.smt2` is **sat** with a useful
+  operation and records `mark_step = 1`, `behavioral_evidence_step = 2`. This
+  makes the production/test ordering explicit instead of smuggling later
+  evidence into the mark.
+
+All six split models were re-run through Chiasmus on 2026-07-24: the two
+`-corrected` queries were `unsat`, both `-buggy` controls and both
+`-nonvacuity` controls were `sat`.
 
 The runtime counterpart independently calls `F_GETFL` on a newly returned
 listener and requires `O_NONBLOCK` before the rest of the poller suite runs. It
 also injects the motivating bad outcome—apparent `F_SETFL` success followed by
 a read-back without the bit—and requires a fail-closed exception after the
 second `F_GETFL`. The core FFI test exercises the same variadic `fcntl` binding
-and transition. The complete Darwin arm64 gate passed with source-built Chez
-10.4.1 for commit `65a0f1e` in
+and transition.
+
+On Windows the runtime counterpart is conformance evidence rather than a
+read-back or per-handle guard:
+`test/jolt/net/nonblocking_test_main.clj` requires `try-accept` on a listener
+with no pending client, and a read on a freshly accepted socket with no pending
+data, to return `::would-block` as a VALUE. A descriptor still in blocking mode
+would park the thread instead, so the suite's own watchdog would report a
+timeout rather than a pass. The observations occur after production has marked
+the handles. That gate ran green on native Windows x86-64; see
+`docs/PLATFORM-COVERAGE.md`. The complete Darwin arm64 gate passed with
+source-built Chez 10.4.1 for commit `65a0f1e` in
 [CI run 30078697403](https://github.com/casselc/jolt-net/actions/runs/30078697403),
 closing the platform-specific runtime evidence for this bounded surface. The
 SMT model still does not pretend to model Apple's calling convention.
@@ -477,14 +524,18 @@ native runtime test, and portable TCP contract are the appropriate evidence.
   constant, width, `sizeof`, and `offsetof` to match the explicitly shared
   descriptor before running socket tests. Darwin/x86-64 remains a separately
   uploaded artifact rather than being silently relabeled as arm64 evidence.
-- **Native calling conventions.** The non-blocking model proves the source-level
-  admission and fail-closed postcondition. The core FFI regression and Darwin
-  runtime gate, not SMT, are the evidence that Chez's variadic convention maps
-  to the platform ABI.
+- **Native calling conventions.** The POSIX non-blocking model proves the
+  source-level admission and fail-closed read-back postcondition. The Windows
+  model is conditional on the header-matching binding, requested value, command
+  representation, and Winsock semantics. Core FFI regressions, header probes,
+  and native runtime gates—not SMT—are the cross-boundary evidence for those
+  premises.
 - **Interrupted syscalls and process signals.** The invariant models do not
   pretend to model kernel signal delivery. Deterministic syscall hooks verify
-  `EINTR` retry and absolute-deadline expiry, while a subprocess writes after
-  peer close and must report a structured reset instead of dying from SIGPIPE.
+  `EINTR` retry, while an injected monotonic clock advances across the call to
+  verify remaining-deadline recomputation and expiry without scheduler timing.
+  A subprocess writes after peer close and must report a structured reset
+  instead of dying from SIGPIPE.
 - **Unbounded poller concurrency.** The wake models cover one candidate writer
   or producer and the critical bounded close or drain/reset ordering. They do
   not quantify over an unbounded number of producers, repeated epochs, scheduler

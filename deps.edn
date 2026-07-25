@@ -38,7 +38,14 @@
            ;; no POSIX nonblocking calls, no SIGPIPE child. See
            ;; docs/WINDOWS-RUNTIME-SEQUENCE.md task W1.
            :blocking-test {:extra-paths ["test"]
-                           :main-opts ["-m" "jolt.net.blocking-test-main"]}}
+                           :main-opts ["-m" "jolt.net.blocking-test-main"]}
+           ;; Task W2. Same dependency-free rule as :blocking-test, and it
+           ;; additionally loads no poller test namespace: Windows has no
+           ;; readiness backend until WSAPoll in task W3, so a suite that
+           ;; quietly required one would be proving POSIX behavior on a
+           ;; Windows runner. See docs/WINDOWS-RUNTIME-SEQUENCE.md task W2.
+           :nonblocking-test {:extra-paths ["test"]
+                              :main-opts ["-m" "jolt.net.nonblocking-test-main"]}}
 
  ;; Deliberately NOT `joltc -M:test`: a bare `joltc` resolves to the stock
  ;; v0.4.15 on PATH, which cannot load this library at all.

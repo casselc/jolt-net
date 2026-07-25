@@ -488,6 +488,14 @@
         {:result result :code code}
         {:result result}))))
 
+(defn- monotonic-nanos
+  "Read the deadline clock. The optional map hook is an internal deterministic
+  EINTR/deadline test seam; production pollers always use jolt.host."
+  [poller]
+  (if-let [clock (:jolt.net/monotonic-nanos poller)]
+    (clock)
+    (jolt.host/monotonic-nanos)))
+
 (defn await-ready
   "Wait up to timeout-ms for readiness and return
   [{:token token :events #{:read ...}} ...].
@@ -537,12 +545,12 @@
                 (ffi/write p :int16 (:events layout)
                            (interest-mask (:interests entry)))
                 (ffi/write p :int16 (:revents layout) 0)))
-            (let [deadline (+ (jolt.host/monotonic-nanos)
+            (let [deadline (+ (monotonic-nanos poller)
                               (* timeout-ms 1000000))
                   poll-result
                   (loop []
                     (let [remaining (max 0 (- deadline
-                                              (jolt.host/monotonic-nanos)))
+                                              (monotonic-nanos poller)))
                           remaining-ms (quot (+ remaining 999999) 1000000)
                           wait-ms (min remaining-ms max-native-wait-ms)
                           outcome (poll-once poller buf n wait-ms)
@@ -553,7 +561,7 @@
                           ;; A signal does not consume the caller's timeout.
                           ;; Retry against the same absolute monotonic deadline.
                           (if (= code (t/errno-code d :eintr))
-                            (if (< (jolt.host/monotonic-nanos) deadline)
+                            (if (< (monotonic-nanos poller) deadline)
                               (recur)
                               ;; poll may leave revents undefined on failure.
                               ;; A deadline-expired interruption is therefore a
@@ -565,7 +573,7 @@
                         ;; return from the caller's timeout.
                         (and (zero? result)
                              (pos? remaining)
-                             (< (jolt.host/monotonic-nanos) deadline))
+                             (< (monotonic-nanos poller) deadline))
                         (recur)
 
                         :else result)))]

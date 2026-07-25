@@ -67,7 +67,7 @@ Ownership transfers with both `net/connected` and `net/in-progress`; neither
 
 **jolt-net does not build on released `joltc` v0.4.15.** It currently pins the
 reviewed `casselc/jolt` proposal fork at
-`e749f154c44ea40c7333b19dccc796cb869ccbd6` and depends on seven primitives added
+`85f645aa1178e4b631198dcbaf46bdad1283750b` and depends on seven primitives added
 there:
 
 - `(jolt.host/target)` — the target descriptor, for fail-closed platform tables;

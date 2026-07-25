@@ -12,13 +12,13 @@
 #           means checking out an exact casselc/jolt revision and building a
 #           matching Chez Scheme.
 #
-# Windows x86_64 has a native blocking-Winsock runtime gate. It deliberately
-# excludes the still-POSIX readiness backend and the alias-scoped Hegel
-# dependency so a socket result cannot be confused with a dependency-resolution
-# or WSAPoll result. The ARM64 preview compiles/runs the ABI probe with native
-# MSVC and uploads the result as review evidence; until that evidence becomes a
-# committed descriptor, source Jolt must identify the host and jolt-net must
-# fail closed. Neither Windows lane yet claims readiness runtime coverage.
+# Windows x86_64 has native W1/W2 gates for blocking sockets, FIONBIO, byte I/O,
+# and connect completion. They deliberately exclude the still-POSIX readiness
+# backend and the alias-scoped Hegel dependency so a result cannot be confused
+# with a dependency-resolution or WSAPoll result. The ARM64 preview compiles and
+# runs the ABI probe with native MSVC; until that evidence becomes a committed
+# descriptor, source Jolt must identify the host and jolt-net must fail closed.
+# Neither Windows lane yet claims readiness runtime coverage.
 # docs/PLATFORM-COVERAGE.md says the same.
 
 name: ci
@@ -193,7 +193,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: casselc/jolt
-          ref: e749f154c44ea40c7333b19dccc796cb869ccbd6
+          ref: 85f645aa1178e4b631198dcbaf46bdad1283750b
           submodules: recursive
           path: jolt-upstream
 
@@ -364,12 +364,12 @@ jobs:
           name: probed-suite-${{ matrix.artifact }}
           path: jolt-net/tools/probed/*.edn
 
-  # W1 is the blocking Winsock substrate, not the readiness backend. Run its
-  # dependency-free native suite through the same direct PowerShell/Chez
-  # boundary used for local validation: no /dev/stdin, bash wrapper, Hegel
-  # dependency, WSAPoll, or nonblocking-runtime claim.
+  # W1 and W2 cover the blocking substrate plus non-blocking transitions, byte
+  # I/O, and connect completion. They deliberately exclude the readiness
+  # backend. Run both dependency-free native suites through direct
+  # PowerShell/Chez: no /dev/stdin, bash wrapper, Hegel dependency, or WSAPoll.
   windows-portable:
-    name: blocking Winsock runtime (Windows x86_64; no readiness backend)
+    name: Winsock W1/W2 runtime (Windows x86_64; no readiness backend)
     runs-on: windows-2022
     timeout-minutes: 25
     defaults:
@@ -430,7 +430,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: casselc/jolt
-          ref: e749f154c44ea40c7333b19dccc796cb869ccbd6
+          ref: 85f645aa1178e4b631198dcbaf46bdad1283750b
           submodules: recursive
           path: jolt-upstream
 
@@ -438,6 +438,16 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\test-windows-blocking.ps1" `
+            -JoltNetPath "$env:GITHUB_WORKSPACE" `
+            -RuntimePath "$env:GITHUB_WORKSPACE\jolt-upstream" `
+            -ChezExe "$env:GITHUB_WORKSPACE\chez-install\bin\scheme.exe" `
+            -TimeoutSeconds 90
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run dependency-free native non-blocking socket suite
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\test-windows-nonblocking.ps1" `
             -JoltNetPath "$env:GITHUB_WORKSPACE" `
             -RuntimePath "$env:GITHUB_WORKSPACE\jolt-upstream" `
             -ChezExe "$env:GITHUB_WORKSPACE\chez-install\bin\scheme.exe" `
@@ -493,7 +503,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: casselc/jolt
-          ref: e749f154c44ea40c7333b19dccc796cb869ccbd6
+          ref: 85f645aa1178e4b631198dcbaf46bdad1283750b
           submodules: recursive
           path: jolt-upstream
 

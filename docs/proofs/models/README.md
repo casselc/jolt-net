@@ -28,6 +28,19 @@ Three more files were added on 2026-07-24 for task W1
 `winsock-init-once-buggy.smt2`, `winsock-init-once-corrected.smt2`, and
 `winsock-init-once-nonvacuity.smt2`.
 
+Task W2 initially made the non-blocking transition model platform-neutral and
+brought the directory to 31 files. That run DID use a standalone solver:
+z3 5.0.0, installed into a throwaway directory and invoked exactly as the shell
+example above. All 31 files matched their declared verdicts.
+
+Independent source/model review then found that the combined model was stronger
+than production: it gated the Windows handle mark on later would-block evidence,
+while production marks immediately after successful `ioctlsocket`. The model
+family is now split into POSIX observable-readback and Windows conditional
+contract trios, bringing the directory to 33 files. On 2026-07-24 Chiasmus
+re-ran all six affected files: both `-corrected` models were `unsat`, and both
+`-buggy` plus both `-nonvacuity` controls were `sat`.
+
 ## Expected results
 
 | Model | Expected | Essential witness or unsat core |
@@ -44,9 +57,12 @@ Three more files were added on 2026-07-24 for task W1
 | `readiness-generation-mismatch.smt2` | `unsat` | generation mismatch conflicts with complete-token dispatch |
 | `readiness-revision-mismatch.smt2` | `unsat` | revision mismatch conflicts with complete-token dispatch |
 | `readiness-current-token-nonvacuity.smt2` | `sat` | fd `8`, generation `10`, revision `3`, dispatch allowed |
-| `nonblocking-transition-buggy.smt2` | `sat` | fixed declaration, successful return, absent bit, marked handle, blocking-capable admission |
-| `nonblocking-transition-corrected.smt2` | `unsat` | explicit ABI boundary plus observed-bit mark postcondition exclude both violation branches |
-| `nonblocking-transition-nonvacuity.smt2` | `sat` | observed bit permits a marked handle and useful short operation |
+| `posix-nonblocking-transition-buggy.smt2` | `sat` | Apple arm64 witness: fixed declaration, successful return, absent bit, marked handle, blocking-capable admission |
+| `posix-nonblocking-transition-corrected.smt2` | `unsat` | variadic declaration plus per-handle `F_GETFL` read-back exclude both POSIX violation branches |
+| `posix-nonblocking-transition-nonvacuity.smt2` | `sat` | observed bit, marked handle, and useful short operation |
+| `windows-nonblocking-contract-buggy.smt2` | `sat` | FIONBIO succeeds with a zero `u_long` requesting blocking mode; production mark admits the still-blocking handle |
+| `windows-nonblocking-contract-corrected.smt2` | `unsat` | exact production mark ordering is safe conditional on the binding, command representation, nonzero `u_long`, and trusted Winsock semantics |
+| `windows-nonblocking-contract-nonvacuity.smt2` | `sat` | useful operation; production mark at step 1 precedes behavioral conformance evidence at step 2 |
 | `accept-terminal-close-buggy.smt2` | `sat` | pre-entry wake consumed; poller remains open; accept remains blocked after listener close |
 | `accept-terminal-close-corrected.smt2` | `unsat` | active await exits, late await is rejected, and no callback/native-close wait cycle exists |
 | `accept-terminal-close-nonvacuity.smt2` | `sat` | removal callback first; active await exits; listener close succeeds |
@@ -86,11 +102,19 @@ revision mismatch:
   revision_mismatch_iff_tokens_differ dispatch_iff_current_complete_token
   violation_iff_mismatch_is_dispatched property_violated
 
-nonblocking transition corrected:
+POSIX nonblocking transition corrected:
   binding_declares_varargs_after_two
-  mark_iff_success_and_observed_postcondition
+  mark_requires_success_and_observed_nonblocking_bit
   short_operation_requires_marked_handle declaration_violation_definition
   lease_violation_definition violation_definition property_violated
+
+Windows nonblocking contract corrected:
+  successful_transition_path_is_in_domain
+  binding_matches_ioctlsocket_header
+  command_argument_has_probed_long_width_and_fionbio_bits
+  argp_contains_fully_initialized_nonzero_u_long
+  trusted_winsock_fionbio_semantics documented_contract_effect
+  violation_definition property_violated
 
 accept terminal close corrected:
   listener_close_owns_the_transition accept_installs_terminal_callback
@@ -168,7 +192,18 @@ interleaving tests supply the semantic oracle:
   marked. `test/jolt/net/poller_test.clj` independently observes the bit on a
   returned listener and injects the buggy control where `F_SETFL` appears to
   succeed but read-back still lacks the bit. These are the source and runtime
-  oracles for the non-blocking-transition models.
+  oracles for the POSIX half of the non-blocking-transition models.
+- `jolt.net.nonblocking/set-raw!` dispatches to `ioctlsocket(FIONBIO)` on
+  Windows, at the probed `u_long` width, and `postcondition-kind` returns
+  `:call-status` there because Winsock has no portable getter to read back.
+  The Windows corrected model is conditional on those probed ABI facts and the
+  documented Winsock contract; production marks immediately after the successful
+  return. The runtime gate supplies later cross-boundary conformance evidence:
+  `test/jolt/net/nonblocking_test_main.clj` requires `try-accept` with no
+  pending client, and a read with no pending data, to return `::would-block` as
+  a value. A descriptor still in blocking mode would park the thread, so that
+  suite's watchdog reports a timeout rather than a pass. It does not gate each
+  production mark or prove the behavior of every future handle.
 - `jolt.net/accept` installs a terminal listener before poller registration;
   `jolt.net.poller/close!` retires admission and waits for an active await to
   exit. `jolt.net.handle/release!` can release the await's listener lease while

@@ -108,25 +108,30 @@
       0)
     ctx))
 
-(def ^:private posix-nonblocking-targets #{:linux :darwin})
+;; Non-blocking transitions and byte I/O are available wherever jolt.net has a
+;; real transition mechanism: fcntl on POSIX, ioctlsocket(FIONBIO) on Winsock.
+;; READINESS is a strictly smaller set -- Windows has no poller until WSAPoll
+;; (task W3) -- so the two are tracked separately rather than letting one flag
+;; stand in for both.
+(def ^:private nonblocking-targets #{:linux :darwin :windows})
 (def ^:private poller-targets #{:linux :darwin})
 
-(defn- posix-nonblocking-runtime? []
-  (contains? posix-nonblocking-targets (:os (jolt.host/target))))
+(defn- nonblocking-runtime? []
+  (contains? nonblocking-targets (:os (jolt.host/target))))
 
 (defn- poller-runtime? []
   (contains? poller-targets (:os (jolt.host/target))))
 
-(defn- require-posix-nonblocking-runtime! [op]
-  (when-not (posix-nonblocking-runtime?)
+(defn- require-nonblocking-runtime! [op]
+  (when-not (nonblocking-runtime?)
     (throw (ex-info (str "jolt.net " (name op)
-                         ": the non-blocking runtime is POSIX-only in this slice")
+                         ": this target has no non-blocking transition")
                     {:jolt.net/op op
                      :jolt.net/kind :unsupported-target
                      :jolt.net/target (jolt.host/target)}))))
 
 (defn- with-nonblocking-lease [sock f]
-  (require-posix-nonblocking-runtime! :set-nonblocking)
+  (require-nonblocking-runtime! :set-nonblocking)
   (h/with-lease
     sock
     (fn [raw generation]
@@ -222,12 +227,26 @@
   "Accept one connection, blocking until one arrives.
 
   On supported POSIX targets this is built from short non-blocking accept leases
-  plus the close-wakeable poller, so concurrent listener close cannot race a recycled
-  descriptor or deadlock behind an uninterruptible lease. Other existing
-  platform paths retain their native blocking implementation in this slice."
+  plus the close-wakeable poller, so concurrent listener close cannot race a
+  recycled descriptor or deadlock behind an uninterruptible lease. Windows
+  retains native blocking accept until its readiness backend lands. Once a
+  Windows listener has been switched to non-blocking mode, this function fails
+  explicitly rather than returning would-block from an API that promises to
+  block. Concurrent accept and try-accept on one Windows listener remain
+  unsupported: this interim mode check is not atomic with native accept entry."
   [listener]
   (if-not (poller-runtime?)
-    (native-blocking-accept listener)
+    (do
+      ;; Preserve the ordinary use-after-close error ahead of the interim
+      ;; Windows mixed-mode diagnostic.
+      (h/raw-open listener)
+      (if (h/nonblocking? listener)
+        (throw (err/invalid-ex
+                 :accept
+                 "blocking accept is unavailable after this listener was switched to non-blocking mode"
+                 {:jolt.net/state :nonblocking
+                  :jolt.net/requires :windows-readiness}))
+        (native-blocking-accept listener)))
     (let [p (poller/open)
           terminal-listener (atom nil)]
       (try
@@ -252,8 +271,9 @@
           (poller/close! p))))))
 
 (defn set-nonblocking!
-  "Put a socket into non-blocking mode. This slice supports POSIX fcntl targets;
-  Windows fails closed until its ioctlsocket path is implemented."
+  "Put a socket into non-blocking mode: fcntl(F_SETFL) on POSIX,
+  ioctlsocket(FIONBIO) on Windows. The handle is marked only after the native
+  transition succeeds."
   [sock]
   (with-nonblocking-lease sock (fn [_ _] nil))
   sock)
@@ -281,7 +301,7 @@
   ::would-block; genuine failures throw."
   ([listener] (try-accept listener {}))
   ([listener opts]
-   (require-posix-nonblocking-runtime! :try-accept)
+   (require-nonblocking-runtime! :try-accept)
    (with-nonblocking-lease
      listener
      (fn [raw _]
@@ -443,7 +463,7 @@
                  :jolt.net/remaining-addresses (vec more)))))))
 
 (defn try-connect
-  "Initiate a POSIX non-blocking connect.
+  "Initiate a non-blocking connect.
 
   `endpoint-or-addresses` may be an endpoint, one value returned by `resolve`,
   or a sequence of resolved addresses. Resolver order is preserved. Synchronous
@@ -464,10 +484,11 @@
   with :jolt.net/remaining-addresses; this keeps address policy above the socket
   substrate without losing candidates or replacing the last native error.
 
-  Windows fails closed until its non-blocking Winsock backend exists."
+  Windows initiates through the same contract, but has no poller until task W3:
+  a Windows caller must supply its own readiness wait before `finish-connect!`."
   ([endpoint-or-addresses] (try-connect endpoint-or-addresses {}))
   ([endpoint-or-addresses opts]
-   (require-posix-nonblocking-runtime! :try-connect)
+   (require-nonblocking-runtime! :try-connect)
    (let [addresses (vec (connect-addresses endpoint-or-addresses opts))]
      (when (empty? addresses)
        (throw (err/invalid-ex :connect "endpoint resolved to no addresses"
@@ -487,7 +508,7 @@
   before readiness is outside the contract because a zero pending error does
   not portably prove that connect has completed."
   [socket]
-  (require-posix-nonblocking-runtime! :finish-connect)
+  (require-nonblocking-runtime! :finish-connect)
   (let [resolved (:jolt.net/connect-address socket)]
     (when-not (resolved-address? resolved)
       (throw (err/invalid-ex
@@ -558,7 +579,7 @@
   Returns a positive byte count, 0 only for a zero-length request,
   ::would-block, or ::eof. Genuine failures throw a structured exception."
   [sock dest off len]
-  (require-posix-nonblocking-runtime! :read)
+  (require-nonblocking-runtime! :read)
   (check-slice! :read dest off len)
   (if (zero? len)
     0
@@ -584,7 +605,7 @@
   ::would-block. The target's SIGPIPE suppression prevents a closed peer from
   terminating the process; genuine failures throw a structured exception."
   [sock src off len]
-  (require-posix-nonblocking-runtime! :write)
+  (require-nonblocking-runtime! :write)
   (check-slice! :write src off len)
   (if (zero? len)
     0
