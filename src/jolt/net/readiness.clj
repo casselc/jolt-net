@@ -28,7 +28,8 @@
   (:require [jolt.ffi :as ffi]
             [jolt.net.error :as err]
             [jolt.net.ffi :as nffi]
-            [jolt.net.target :as t]))
+            [jolt.net.target :as t]
+            [jolt.net.wake :as wake]))
 
 (def ^:private d nffi/descriptor)
 (def ^:private windows? (= :windows (:platform d)))
@@ -48,11 +49,12 @@
     :fd-type     the foreign type of the struct's handle member
     :event-type  the foreign type of its events/revents members
     :wake-transport
-                 the wake mechanism available BENEATH this backend, or nil.
-                 POSIX has the self-pipe. Windows has none until task W4, and
-                 nil is what keeps the public Windows poller fail-closed for
-                 wake, mutation-wake, and close-completion instead of quietly
-                 degrading them."
+                 the wake mechanism available BENEATH this backend, named by
+                 jolt.net.wake rather than re-derived here. POSIX has the
+                 self-pipe; Windows has the connected loopback datagram pair
+                 added in task W4. The two are NOT interchangeable in their
+                 terminal semantics -- see jolt.net.wake/terminal-wake -- so the
+                 kind is carried, never flattened to a boolean."
   (if windows?
     {:kind :windows-wsapoll
      :op :wsapoll
@@ -61,20 +63,25 @@
      ;; SOCKET, not int. A valid handle may have its high bit set.
      :fd-type :uptr
      :event-type :int16
-     :wake-transport nil}
+     :wake-transport wake/kind}
     {:kind :posix-poll
      :op :poll
      :struct :pollfd
      :layout (t/layout d :pollfd)
      :fd-type :int
      :event-type :int16
-     :wake-transport :self-pipe}))
+     :wake-transport wake/kind}))
 
 (def entry-size (:size (:layout backend)))
 
 (defn wake-transport
   "The wake mechanism available beneath this backend, or nil when the target
-  has none. Callers must treat nil as a hard capability boundary."
+  has none. Callers must treat nil as a hard capability boundary.
+
+  This reports the TARGET's capability. A particular poller value may still have
+  been constructed without one -- that is what the internal wake-less Windows
+  readiness adapter is -- so `jolt.net.poller/wake-transport?` is the per-poller
+  question and this is the per-target one."
   []
   (:wake-transport backend))
 

@@ -144,19 +144,19 @@
         nonblock (get-in d [:const :o-nonblock])
         calls (atom [])]
     (c/check-throws
-      "apparent F_SETFL success fails closed when read-back lacks O_NONBLOCK"
-      {:jolt.net/op :fcntl-setfl
-       :jolt.net/kind :unsupported-target
-       :jolt.net/expected-flag nonblock
-       :jolt.net/observed-flags 0}
-      #(with-redefs
-         [nffi/invoke-captured
-          (fn [op raw command arg]
-            (swap! calls conj [op raw command arg])
+     "apparent F_SETFL success fails closed when read-back lacks O_NONBLOCK"
+     {:jolt.net/op :fcntl-setfl
+      :jolt.net/kind :unsupported-target
+      :jolt.net/expected-flag nonblock
+      :jolt.net/observed-flags 0}
+     #(with-redefs
+       [nffi/invoke-captured
+        (fn [op raw command arg]
+          (swap! calls conj [op raw command arg])
             ;; Model the Darwin ABI failure that motivated the guard: F_SETFL
             ;; appears successful, but the third argument never takes effect.
-            [0 0])]
-         (nb/set-raw! 73)))
+          [0 0])]
+        (nb/set-raw! 73)))
     (c/check "the fail-closed transition verifies after setting the flag"
              [getfl setfl getfl]
              (mapv #(nth % 2) @calls)))
@@ -168,14 +168,14 @@
         separate-capture? (atom false)
         observed
         (with-redefs
-          [nffi/invoke-captured
-           (fn [op & args]
-             (reset! invoked [op args])
-             [-1 expected])
-           err/capture
-           (fn []
-             (reset! separate-capture? true)
-             999999)]
+         [nffi/invoke-captured
+          (fn [op & args]
+            (reset! invoked [op args])
+            [-1 expected])
+          err/capture
+          (fn []
+            (reset! separate-capture? true)
+            999999)]
           (poll-once {} nil 3 25))]
     (c/check "poll-once dispatches through the captured call table"
              [:poll [nil 3 25]] @invoked)
@@ -207,17 +207,17 @@
         visited (atom [])
         selected
         (advance
-          addresses
-          {}
-          (fn [address _]
-            (swap! visited conj (:id address))
-            (if (= 2 (:id address))
-              {:jolt.net/socket ::fake-socket
-               :jolt.net/status net/in-progress
-               :jolt.net/address address}
-              (throw (ex-info "candidate failed"
-                              {:jolt.net/op :connect
-                               :jolt.net/code (:id address)})))))]
+         addresses
+         {}
+         (fn [address _]
+           (swap! visited conj (:id address))
+           (if (= 2 (:id address))
+             {:jolt.net/socket ::fake-socket
+              :jolt.net/status net/in-progress
+              :jolt.net/address address}
+             (throw (ex-info "candidate failed"
+                             {:jolt.net/op :connect
+                              :jolt.net/code (:id address)})))))]
     (c/check "candidate attempts preserve resolver order"
              [1 2] @visited)
     (c/check "a selected attempt retains every untried candidate"
@@ -228,13 +228,13 @@
         data
         (try
           (advance
-            [{:id 10} {:id 20} {:id 30}]
-            {}
-            (fn [address _]
-              (swap! visited conj (:id address))
-              (throw (ex-info "real candidate failure"
-                              {:jolt.net/op :connect
-                               :jolt.net/code (:id address)}))))
+           [{:id 10} {:id 20} {:id 30}]
+           {}
+           (fn [address _]
+             (swap! visited conj (:id address))
+             (throw (ex-info "real candidate failure"
+                             {:jolt.net/op :connect
+                              :jolt.net/code (:id address)}))))
           (catch :default e (ex-data e)))]
     (c/check "all failed candidates are tried in resolver order"
              [10 20 30] @visited)
@@ -245,7 +245,7 @@
     (c/check-throws "a malformed resolved sockaddr fails before native use"
                     {:jolt.net/kind :invalid :jolt.net/op :connect}
                     #(net/try-connect
-                       (assoc resolved :jolt.net/sockaddr-len 0))))
+                      (assoc resolved :jolt.net/sockaddr-len 0))))
 
   (c/section "non-blocking connect completion and deadline composition")
   (let [listener (net/listen (net/endpoint "127.0.0.1" 0)
@@ -337,9 +337,9 @@
           after (net/native-handle after-socket)]
       (try
         (c/check-pred
-          (str "50 failed initiations leak no descriptors (before " before
-               ", after " after ")")
-          #(< % 10) (abs (- after before)))
+         (str "50 failed initiations leak no descriptors (before " before
+              ", after " after ")")
+         #(< % 10) (abs (- after before)))
         (finally (net/close! after-socket)))))
 
   (c/section "non-blocking byte I/O")
@@ -462,8 +462,8 @@
     (c/check "close return means lifecycle and both wake handles are closed"
              [:closed true true]
              [(:phase @(:lifecycle poller))
-              (h/closed? (:wake-write poller))
-              (h/closed? (:wake-read poller))])
+              (h/closed? (:write (:wake poller)))
+              (h/closed? (:read (:wake poller)))])
     (let [start (jolt.host/monotonic-nanos)
           result (net/close! poller)
           elapsed (- (jolt.host/monotonic-nanos) start)]
@@ -594,26 +594,29 @@
       (c/check "close cannot pass an admitted wake writer"
                ::still-closing (deref closing 20 ::still-closing))
       (c/check "pipe read end stays open until admitted wake writers drain"
-               false (h/closed? (:wake-read p)))
+               false (h/closed? (:read (:wake p))))
       (poller/release-wake-write! p writer)
       (reset! released? true)
       (c/check "close completes after the admitted writer releases"
                true (deref closing 500 ::timed-out))
       (c/check "write end retires before the read end"
                [true true]
-               [(h/closed? (:wake-write p)) (h/closed? (:wake-read p))])
+               [(h/closed? (:write (:wake p))) (h/closed? (:read (:wake p)))])
       (finally
         (when-not @released?
           (poller/release-wake-write! p writer))
         (net/close! p)))))
 
 (defn run! []
-  (if (contains? #{:linux :darwin} (:os (jolt.host/target)))
+  ;; Windows joined the readiness runtime in task W4. The gate below must name
+  ;; the CURRENT set: continuing to assert that Windows fails closed here would
+  ;; assert a boundary that no longer exists.
+  (if (contains? #{:linux :darwin :windows} (:os (jolt.host/target)))
     (run-posix!)
     (do
       (c/section "non-blocking I/O and poller platform gate")
-      (c/check-throws "the readiness runtime fails closed off POSIX"
+      (c/check-throws "the readiness runtime fails closed off supported targets"
                       {:jolt.net/kind :unsupported-target}
                       #(net/open-poller))
       (c/skip "non-blocking I/O and poller runtime checks"
-              "this slice has a POSIX runtime implementation only"))))
+              "this target has no readiness runtime"))))

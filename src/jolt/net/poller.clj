@@ -1,18 +1,31 @@
 (ns jolt.net.poller
-  "POSIX poll(2) readiness with a non-blocking self-pipe waker.
+  "Native readiness with a non-blocking, owner-independent waker.
 
   Registration mutations are values in one acknowledged queue. The caller does
   not return until its mutation has been applied, and every mutation wakes a
   native poll snapshot that may now be stale. Tokens carry both socket ownership
   generation and registration revision; events from an old snapshot are dropped
-  unless its complete token is still current."
+  unless its complete token is still current.
+
+  There is exactly ONE of each of these, shared by every target: lifecycle,
+  registration/token state machine, acknowledged mutation queue, wake
+  epoch/coalescing state, stale-event gate, readiness decoder, and
+  caller-owned absolute deadline. Two things vary, and only these two:
+
+    - the native wait, in jolt.net.readiness (poll(2) vs WSAPoll); and
+    - the wake transport, in jolt.net.wake (self-pipe vs connected loopback
+      datagram pair).
+
+  Neither seam owns any registration, token, generation, revision, deadline, or
+  lifecycle state. A second copy of that machinery would be a second set of
+  bugs."
   (:require [jolt.ffi :as ffi]
             [jolt.net.error :as err]
             [jolt.net.ffi :as nffi]
             [jolt.net.handle :as h]
-            [jolt.net.nonblocking :as nb]
             [jolt.net.readiness :as r]
-            [jolt.net.target :as t]))
+            [jolt.net.target :as t]
+            [jolt.net.wake :as wake]))
 
 (def ^:private d nffi/descriptor)
 (def ^:private next-poller (atom 0))
@@ -20,15 +33,20 @@
 
 (declare submit! signal-wake! wake-transport?)
 
+;; Every target with both a readiness backend and a wake transport. Windows
+;; joined in task W4, when the loopback datagram waker made close a completion
+;; boundary there rather than a refusal.
+(def ^:private poller-targets #{:linux :darwin :windows})
+
 (defn- unsupported! [op]
   (throw (ex-info (str "jolt.net " (name op)
-                       ": the poller runtime is POSIX-only in this slice")
+                       ": this target has no readiness runtime")
                   {:jolt.net/op op
                    :jolt.net/kind :unsupported-target
                    :jolt.net/target (jolt.host/target)})))
 
-(defn- require-posix! [op]
-  (when-not (contains? #{:linux :darwin} (:os (jolt.host/target)))
+(defn- require-poller-target! [op]
+  (when-not (contains? poller-targets (:os (jolt.host/target)))
     (unsupported! op)))
 
 (defn- take-mutations! [poller]
@@ -186,7 +204,7 @@
           nil
           (if (compare-and-set! admission old (update old :writers inc))
             (try
-              (h/acquire! (:wake-write poller))
+              (h/acquire! (:write (:wake poller)))
               (catch :default e
                 (loop []
                   (let [s @admission]
@@ -225,50 +243,60 @@
       (when (pos? (:writers @admission))
         (Thread/yield)
         (recur)))
-    ;; Closing write first cannot SIGPIPE an admitted writer: there are none.
-    ;; Keep read open until await has released its read lease.
-    (when (wake-transport? poller)
-      (h/close! (:wake-write poller))))
+    ;; Retiring the sender first cannot SIGPIPE an admitted writer: there are
+    ;; none left. Keep the receiver open until await has released its lease.
+    (wake/retire-sender! (:wake poller)))
   nil)
 
 (defn- wake-call
-  "Invoke one non-blocking wake-pipe syscall with its captured errno.
-  The keyed hook is a deterministic test seam with the same result-map shape."
-  [poller hook-key op raw buf len]
+  "Invoke one non-blocking wake-transport call with its captured native error.
+
+  The direction (:signal! or :drain!) selects the transport's own operation, so
+  the POSIX write/read pair and the Winsock send/recv pair -- which differ in
+  argument count and in length/result width -- never leak into this shared
+  layer. The keyed hook is a deterministic test seam with the same result-map
+  shape."
+  [poller hook-key direction raw buf len]
   (if-let [hook (get poller hook-key)]
     (hook raw buf len)
-    (let [[result code] (nffi/invoke-captured op raw buf len)]
-      (if (neg? result)
-        {:result result :code code}
-        {:result result}))))
+    ((direction (:wake poller)) raw buf len)))
+
+(defn- send-wake-byte!
+  "Write one byte through the transport's admitted sender lease.
+
+  Returns nil on success or on a would-block, which is not a lost wake: a full
+  send buffer means undrained wake data is already queued, so the receiver is
+  readable either way. Any other native error throws."
+  [poller lease]
+  (let [raw (:raw lease)
+        buf (ffi/alloc 1)]
+    (try
+      (ffi/write buf :uint8 0 1)
+      (loop []
+        (let [{:keys [result code]}
+              (wake-call poller :jolt.net/wake-write-call :signal! raw buf 1)]
+          (when (neg? result)
+            (cond
+              (= code (t/errno-code d :eintr))
+              (recur)
+
+              (or (= code (t/errno-code d :eagain))
+                  (= code (t/errno-code d :ewouldblock)))
+              nil
+
+              :else
+              (throw (err/native-ex :wake code nil))))))
+      (finally (ffi/free buf)))))
 
 (defn- ensure-wake-byte! [poller]
   (when (compare-and-set! (:wake-pending poller) false true)
     (if-let [lease (acquire-wake-write! poller)]
       (try
-        (let [raw (:raw lease)]
-          (let [buf (ffi/alloc 1)]
-            (try
-              (ffi/write buf :uint8 0 1)
-              (loop []
-                (let [{:keys [result code]}
-                      (wake-call poller :jolt.net/wake-write-call
-                                 :write raw buf 1)]
-                  (when (neg? result)
-                    (cond
-                      (= code (t/errno-code d :eintr))
-                      (recur)
-
-                      (or (= code (t/errno-code d :eagain))
-                          (= code (t/errno-code d :ewouldblock)))
-                      nil
-
-                      :else
-                      (throw (err/native-ex :wake code nil))))))
-              (finally (ffi/free buf)))))
+        (send-wake-byte! poller lease)
         (catch :default e
           ;; Closing the poller can race a redundant wake. Only propagate while
-          ;; the poller is still open; close supplies the terminal pipe HUP.
+          ;; the poller is still open; close publishes its own terminal wake and
+          ;; reports a failure there rather than swallowing it.
           (when (= :open (:phase @(:lifecycle poller)))
             (reset! (:wake-pending poller) false)
             (throw e)))
@@ -277,14 +305,55 @@
       (reset! (:wake-pending poller) false)))
   nil)
 
+(defn- publish-terminal-wake!
+  "Publish close's terminal wake byte, unconditionally.
+
+  This deliberately does NOT go through `ensure-wake-byte!`'s coalescing gate.
+  That gate is correct for ordinary wakes, where a pending byte is as good as a
+  new one -- but close needs a byte that is definitely IN the receiver, and the
+  gate can be observed `true` by a producer whose own send has not landed yet.
+  One extra datagram is a trivial price for making cancellation unconditional.
+
+  It runs while sends are still admitted, which is the whole point of the
+  ordering: on Windows the published byte is the ONLY thing that forces a parked
+  WSAPoll to return, because retiring a datagram SENDER is invisible to its
+  peer. POSIX additionally gets POLLHUP from the retired write end, but this
+  path does not depend on that.
+
+  Returns nil, or the native exception if the send genuinely failed. Close
+  carries that value to the end of its sequence and throws it only after the
+  boundary has completed, so a transport fault is reported rather than silently
+  swallowed AND rather than leaving the poller stuck in :closing."
+  [poller]
+  (when (wake-transport? poller)
+    ;; Advance the epoch first, exactly as an ordinary wake does, so a drain
+    ;; already in flight observes the change and restores a byte after clearing
+    ;; the gate. That restoration is best-effort by design -- it cannot run once
+    ;; admission is retired -- which is why it is a supplement to await-ready's
+    ;; pre-entry terminal check rather than the guarantee itself.
+    (swap! (:wake-sequence poller) inc)
+    (if-let [lease (acquire-wake-write! poller)]
+      (try
+        (send-wake-byte! poller lease)
+        ;; A real byte now exists, so any coalesced producer that already set
+        ;; the gate is satisfied by it too.
+        (reset! (:wake-pending poller) true)
+        nil
+        (catch :default e e)
+        (finally (release-wake-write! poller lease)))
+      ;; Unreachable from close!, which publishes before it retires admission.
+      (err/invalid-ex :close "wake sends were retired before the terminal wake"
+                      {:jolt.net/requires :wake-transport}))))
+
 (defn wake-transport?
   "Does this poller have a wake transport beneath it?
 
-  False only for the internal Windows readiness adapter, where it is the single
-  fact every wake-dependent contract is gated on. Nothing degrades quietly when
-  it is false; the affected operations refuse."
+  False only for the internal Windows readiness adapter, which task W3 used to
+  exercise WSAPoll under the shared token machinery before a Windows waker
+  existed. It is the single fact every wake-dependent contract is gated on.
+  Nothing degrades quietly when it is false; the affected operations refuse."
   [poller]
-  (some? (:wake-write poller)))
+  (some? (:wake poller)))
 
 (defn- require-wake-transport! [poller op]
   (when-not (wake-transport? poller)
@@ -330,10 +399,11 @@
           (if (compare-and-set! lifecycle old
                                 (assoc old :phase :closed))
             (do
-              ;; wake-write was retired and closed before finish-close! can run.
-              (when (wake-transport? poller)
-                (h/close! (:wake-write poller))
-                (h/close! (:wake-read poller)))
+              ;; Step 8. The sender was already retired before this can run, and
+              ;; `awaiting?` is false, so the active native wait has exited and
+              ;; released its receiver lease. Retiring the receiver here is the
+              ;; last thing that happens before the poller reads :closed.
+              (wake/retire-receiver! (:wake poller))
               true)
             (recur))
           :else false)))))
@@ -342,17 +412,29 @@
   "Close a poller. Registered sockets are borrowed and remain open.
 
   With a wake transport, a blocked await is woken and the winning close does
-  not return until that await exits and both wake descriptors are closed. The
-  internal wake-less Windows adapter instead refuses atomically while an await
-  is active; task W4 supplies the transport needed to make that case a
-  completion boundary."
+  not return until that await exits and both wake handles are retired. The
+  internal wake-less Windows readiness adapter instead refuses atomically while
+  an await is active, because nothing could force that await to exit.
+
+  The ordering below is load-bearing, not incidental:
+
+    1. atomically win the lifecycle transition;
+    2. clear registrations through the acknowledged mutation queue;
+    3. publish a real terminal wake byte, while sends are still admitted;
+    4. retire wake-send admission, so no later sender can enter;
+    5. wait for already-admitted sends to release their handle leases and
+       their CAS-counted writer admission;
+    6. retire the sender;
+    7. keep the receiver alive and leased until the active native wait exits;
+    8. retire the receiver; and
+    9. return only once the lifecycle reads :closed.
+
+  Steps 3 and 4 cannot be swapped on Windows. Retiring a datagram SENDER is
+  invisible to its connected peer -- there is no hangup to observe -- so the
+  byte published at step 3 is the only thing that can force a parked WSAPoll to
+  return. POSIX gets the retired pipe's POLLHUP as a second, independent
+  guarantee, but this sequence does not rely on having one."
   [poller]
-  ;; Close is a COMPLETION boundary: it returns only after an active await has
-  ;; exited, and on POSIX the retired wake pipe's HUP is what forces that exit.
-  ;; Without a wake transport there is nothing to force it, so an adapter close
-  ;; refuses while an await is running rather than parking for the awaiting
-  ;; caller's whole timeout and calling that "completion". Terminal close
-  ;; against a blocked await is a W4 obligation.
   (let [lifecycle (:lifecycle poller)
         wake? (wake-transport? poller)]
     (loop []
@@ -376,19 +458,24 @@
               (when-let [before-cas (:jolt.net/before-close-cas poller)]
                 (before-cas old))
               (if (compare-and-set! lifecycle old (assoc old :phase :closing))
-                (do
-                  (submit! poller {:op :clear})
-                  (signal-wake! poller)
-                  (retire-wake-writes! poller)
-                  ;; Closing write makes the retained read end report HUP, so an
-                  ;; active poll cannot remain parked. Wait for await's finally
-                  ;; to release the read lease; the winning close is a
-                  ;; completion boundary, not merely a stop request.
+                ;; Step 1 is won. Everything below runs exactly once.
+                (let [_ (submit! poller {:op :clear})           ; step 2
+                      failure (publish-terminal-wake! poller)]  ; step 3
+                  (retire-wake-writes! poller)                  ; steps 4, 5, 6
+                  ;; Step 7. Wait for the awaiting caller's finally to release
+                  ;; the receiver lease; the winning close is a COMPLETION
+                  ;; boundary, not merely a stop request.
                   (loop []
                     (when (:awaiting? @lifecycle)
                       (Thread/yield)
                       (recur)))
-                  (finish-close! poller)
+                  (finish-close! poller)                        ; steps 8, 9
+                  ;; A terminal-wake transport fault is reported only here, once
+                  ;; the boundary is complete and the poller reads :closed.
+                  ;; Throwing at step 3 would strand it in :closing; swallowing
+                  ;; it would hide a broken waker behind a bounded-latency
+                  ;; native wait cap.
+                  (when failure (throw failure))
                   true)
                 (recur))))
           :closing false
@@ -398,12 +485,13 @@
   "Build the poller value shared by every backend.
 
   There is exactly ONE registration and token state machine, and this is it.
-  The only thing a backend varies is whether a wake transport exists: pass the
-  two pipe handles, or nil for a target that has none yet. Everything else --
-  generation-bearing and revision-bearing tokens, the acknowledged mutation
-  queue, snapshot capture, stale-event rejection, lifecycle -- is identical, so
-  a Windows readiness adapter cannot drift from the POSIX poller's semantics."
-  [read-h write-h adapter?]
+  The only thing a backend varies is the wake transport value: pass one built by
+  jolt.net.wake, or nil for the internal wake-less readiness adapter. Everything
+  else -- generation-bearing and revision-bearing tokens, the acknowledged
+  mutation queue, snapshot capture, stale-event rejection, wake epoch, writer
+  admission, lifecycle -- is identical on every target, so neither a Windows
+  poller nor the readiness adapter can drift from the POSIX poller's semantics."
+  [transport adapter?]
   (let [poller
         {:jolt.net/poller true
          :jolt.net/readiness-adapter adapter?
@@ -416,8 +504,7 @@
          :wake-sequence (atom 0)
          :wake-admission (atom {:phase :open :writers 0})
          :next-registration (atom 0)
-         :wake-read read-h
-         :wake-write write-h}]
+         :wake transport}]
     (assoc poller :close (fn [] (close! poller) nil))))
 
 (defn open-readiness-adapter
@@ -425,10 +512,13 @@
   NO wake transport.
 
   This is not `open` and is deliberately not reachable through the public
-  jolt.net API. It exists so task W3 can exercise real WSAPoll readiness under
-  the shared token machinery before task W4 supplies an owner-independent
-  Windows wake transport. What it does NOT provide, and refuses rather than
-  fakes:
+  jolt.net API. It exists because task W3 exercised real WSAPoll readiness under
+  the shared token machinery BEFORE task W4 supplied an owner-independent
+  Windows wake transport, and it is retained so that evidence stays
+  reproducible: the wake-less refusals below are still the honest behavior of a
+  poller constructed without a waker, and they are what the W3 gate proves.
+  Production Windows callers get `open`, which always has a transport. What this
+  adapter does NOT provide, and refuses rather than fakes:
 
     - `wake!` throws; there is no byte to write.
     - `close!` throws while an await is running; terminal close against a
@@ -443,29 +533,20 @@
     (unsupported! :open-readiness-adapter))
   ;; Winsock must be up before WSAPoll, as for every other Winsock entry point.
   (nffi/ensure-subsystem!)
-  (poller-value nil nil true))
+  (poller-value nil true))
 
 (defn open
-  "Open a POSIX poller with a non-blocking self-pipe waker."
+  "Open a poller with this target's owner-independent, non-blocking waker.
+
+  POSIX gets a self-pipe; Windows gets a connected loopback datagram pair. The
+  choice, its native calls, and its rollback all live in jolt.net.wake -- this
+  function only pairs a transport with the shared state machine."
   []
-  (require-posix! :open-poller)
-  (let [fds (ffi/alloc 8)]
-    (try
-      (err/checked-captured
-       :pipe neg? (nffi/invoke-captured :pipe fds))
-      (let [read-raw (ffi/read fds :int 0)
-            write-raw (ffi/read fds :int 4)]
-        (try
-          (nb/set-raw! read-raw)
-          (nb/set-raw! write-raw)
-          (let [read-h (h/own read-raw :poller-wake-read {})
-                write-h (h/own write-raw :poller-wake-write {})]
-            (poller-value read-h write-h false))
-          (catch :default e
-            (h/raw-close! read-raw)
-            (h/raw-close! write-raw)
-            (throw e))))
-      (finally (ffi/free fds)))))
+  (require-poller-target! :open-poller)
+  ;; Winsock must be up before any socket call, including the waker's own.
+  ;; A no-op elsewhere.
+  (nffi/ensure-subsystem!)
+  (poller-value (wake/open) false))
 
 (def ^:private valid-interests #{:read :write})
 
@@ -516,23 +597,26 @@
 ;; reads both platforms' flag values from the probed table. They are not
 ;; reimplemented here: the shared layer must not carry one target's constants.
 
-(defn- drain-wake-pipe! [poller raw]
+(defn- drain-wake! [poller raw]
   (let [buf (ffi/alloc 64)
-        before @(:wake-sequence poller)]
+        before @(:wake-sequence poller)
+        benign? (:benign-drain-code? (:wake poller))]
     (try
       (loop []
         (let [{:keys [result code]}
-              (wake-call poller :jolt.net/wake-read-call
-                         :read raw buf 64)
+              (wake-call poller :jolt.net/wake-read-call :drain! raw buf 64)
               n result]
           (cond
             (pos? n) (recur)
+            ;; Zero terminates on both transports: an emptied pipe reports EOF
+            ;; that way, and this protocol never sends a zero-length datagram.
             (zero? n) nil
             (= code (t/errno-code d :eintr)) (recur)
-            :else
-            (when-not (or (= code (t/errno-code d :eagain))
-                          (= code (t/errno-code d :ewouldblock)))
-              (throw (err/native-ex :wake-read code nil))))))
+            ;; Which drain errors are "nothing more to drain" is a TRANSPORT
+            ;; fact, not a shared one -- a connected datagram receiver can also
+            ;; surface WSAECONNRESET from a retired peer. See jolt.net.wake.
+            :else (when-not (benign? code)
+                    (throw (err/native-ex :wake-read code nil))))))
       (finally
         (reset! (:wake-pending poller) false)
         (ffi/free buf)
@@ -647,7 +731,7 @@
   ;; its own preconditions, so it carries a marker rather than re-deriving a
   ;; target check that would reject it.
   (when-not (:jolt.net/readiness-adapter poller)
-    (require-posix! :await-ready))
+    (require-poller-target! :await-ready))
   (when-not (and (integer? timeout-ms) (not (neg? timeout-ms)))
     (throw (err/invalid-ex :await-ready
                            "timeout-ms must be a non-negative integer"
@@ -665,15 +749,15 @@
               ;; always does. The Windows readiness adapter does not until W4,
               ;; and `base` is what keeps that difference to an array offset
               ;; instead of a second copy of this function.
-              wake? (some? (:wake-read poller))
+              wake? (wake-transport? poller)
               base (if wake? 1 0)
-              wl (when wake? (h/acquire! (:wake-read poller)))
+              wl (when wake? (h/acquire! (:read (:wake poller))))
               _ (reset! wake-lease wl)
               ;; A mutation completed before this await may have left a
               ;; coalesced byte in the pipe. Its state is already acknowledged,
               ;; so consume it before taking the native snapshot.
               _ (when (and wake? @(:wake-pending poller))
-                  (drain-wake-pipe! poller (:raw wl)))
+                  (drain-wake! poller (:raw wl)))
               _ (when (and wake?
                            (not= entry-wake-sequence
                                  @(:wake-sequence poller)))
@@ -699,31 +783,49 @@
               (when wake? (r/encode! buf 0 (:raw wl) #{:read}))
               (doseq [[idx entry] (map-indexed vector entries)]
                 (r/encode! buf (+ base idx) (:raw entry) (:interests entry)))
-              (let [deadline (+ (monotonic-nanos poller)
-                                (* timeout-ms 1000000))
-                    poll-result (native-wait! poller buf n deadline)]
-                (if (nil? poll-result)
-                  []
-                  (do
-                    (when wake?
-                      (let [wake-bits (r/revents buf 0)]
-                        (when-not (zero? wake-bits)
-                          (drain-wake-pipe! poller (:raw wl)))))
-                    (drain-mutations! poller)
-                    ;; Every event is gated on current-token?: a snapshot taken
-                    ;; before the native wait may name a registration that has
-                    ;; since been updated, removed, or replaced by a different
-                    ;; socket reusing the descriptor.
-                    (reduce
-                     (fn [ready [idx entry]]
-                       (let [bits (r/revents buf (+ base idx))
-                             events (r/event-set bits)]
-                         (if (and (seq events)
-                                  (current-token? poller (:token entry)))
-                           (conj ready {:token (:token entry) :events events})
-                           ready)))
-                     []
-                     (map-indexed vector entries)))))
+              ;; The pre-entry terminal check, and the ONLY reason a Windows
+              ;; close cannot lose its cancellation to a race.
+              ;;
+              ;; Close publishes its terminal byte AFTER winning the :closing
+              ;; transition. If that byte is still in the receiver it makes the
+              ;; wait below return at once. But this await's own pre-snapshot
+              ;; drain, just above, may legitimately have consumed it -- and
+              ;; the drain's epoch-restore cannot help once close has retired
+              ;; wake-send admission. Ordering saves it: for the byte to have
+              ;; been drained here, the publish (and therefore the :closing
+              ;; transition that precedes it) must already have happened, so
+              ;; this read cannot still see :open. Parking is refused in
+              ;; exactly the case where nothing could wake it.
+              ;;
+              ;; This sits after the last drain and before the native call for
+              ;; that reason. Moving it earlier would reopen the window.
+              (if-not (= :open (:phase @(:lifecycle poller)))
+                []
+                (let [deadline (+ (monotonic-nanos poller)
+                                  (* timeout-ms 1000000))
+                      poll-result (native-wait! poller buf n deadline)]
+                  (if (nil? poll-result)
+                    []
+                    (do
+                      (when wake?
+                        (let [wake-bits (r/revents buf 0)]
+                          (when-not (zero? wake-bits)
+                            (drain-wake! poller (:raw wl)))))
+                      (drain-mutations! poller)
+                      ;; Every event is gated on current-token?: a snapshot taken
+                      ;; before the native wait may name a registration that has
+                      ;; since been updated, removed, or replaced by a different
+                      ;; socket reusing the descriptor.
+                      (reduce
+                       (fn [ready [idx entry]]
+                         (let [bits (r/revents buf (+ base idx))
+                               events (r/event-set bits)]
+                           (if (and (seq events)
+                                    (current-token? poller (:token entry)))
+                             (conj ready {:token (:token entry) :events events})
+                             ready)))
+                       []
+                       (map-indexed vector entries))))))
               (finally (ffi/free buf)))))
         (finally
           (doseq [lease @socket-leases] (h/release! lease))
