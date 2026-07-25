@@ -35,6 +35,10 @@ remain out of scope. See
 `docs/PLATFORM-COVERAGE.md` for exactly what is verified on which platform —
 including what is *not*.
 
+The native Windows implementation is split into independently reviewable tasks
+in `docs/WINDOWS-RUNTIME-SEQUENCE.md`, including the exact PowerShell/Chez
+workflow and the evidence required before each capability is promoted.
+
 ## Non-blocking connect
 
 The substrate keeps connection policy above native socket ownership:
@@ -63,7 +67,7 @@ Ownership transfers with both `net/connected` and `net/in-progress`; neither
 
 **jolt-net does not build on released `joltc` v0.4.15.** It currently pins the
 reviewed `casselc/jolt` proposal fork at
-`ecf7728f15d8b8f858327c47dbd8b751eb36798c` and depends on six primitives added
+`e749f154` and depends on seven primitives added
 there:
 
 - `(jolt.host/target)` — the target descriptor, for fail-closed platform tables;
@@ -75,6 +79,9 @@ there:
 - `{:varargs-after n}` on `jolt.ffi/defcfn` — preserves the C variadic ABI
   boundary even with a fully typed Jolt signature; required for `fcntl` on
   Apple arm64.
+- `{:capture-native-error true}` on `jolt.ffi/defcfn` — returns the native
+  result and its matching `errno`/Windows last-error value as one pair before a
+  collect-safe call can reactivate the runtime and clobber the error slot.
 
 Run everything through `bin/jnc`, which pins the fork and fails with a readable
 message rather than an unbound-var error:

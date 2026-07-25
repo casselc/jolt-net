@@ -2,7 +2,7 @@
 # jnc — run jolt-net against the local jolt fork.
 #
 # jolt-net cannot be built by the released joltc: it needs the fork's target,
-# clock, errno, 16-bit-type, and scoped array-slice primitives.
+# clock, atomic native-error, 16-bit-type, and scoped array-slice primitives.
 # A bare `joltc` on PATH would fail with an unbound-var error far from the cause,
 # so this wrapper pins the fork and says so plainly if it is missing.
 #

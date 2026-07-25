@@ -411,7 +411,11 @@ data-flow property.
   pointer fails there loudly. A model would only restate the intent.
 - **Struct layouts.** Not a logic property. These are checked against the
   platform's own headers by `tools/probe-constants.sh`, which is ground truth
-  rather than a model of it.
+  rather than a model of it. The Linux/aarch64 and Darwin/x86-64 candidate jobs
+  also normalize only the probe's architecture label and require every native
+  constant, width, `sizeof`, and `offsetof` to match the explicitly shared
+  descriptor before running socket tests. Darwin/x86-64 remains a separately
+  uploaded artifact rather than being silently relabeled as arm64 evidence.
 - **Native calling conventions.** The non-blocking model proves the source-level
   admission and fail-closed postcondition. The core FFI regression and Darwin
   runtime gate, not SMT, are the evidence that Chez's variadic convention maps
