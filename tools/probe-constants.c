@@ -85,8 +85,17 @@ int main(void) {
     );
 #ifdef _WIN32
     printf(" :nfds-bytes nil\n");
+    /* ioctlsocket is `int ioctlsocket(SOCKET, long cmd, u_long *argp)`. NEITHER
+       of those two types is pointer-width on Win64 -- both are 32 bits, unlike
+       the LP64 platforms this codebase otherwise targets. Handing ioctlsocket a
+       pointer-width argument cell would leave four bytes of the value it reads
+       uninitialized, so both widths are probed rather than assumed. */
+    printf(" :ioctl-cmd-bytes %zu\n", sizeof(long));
+    printf(" :ioctl-arg-bytes %zu\n", sizeof(u_long));
 #else
     printf(" :nfds-bytes %zu\n", sizeof(nfds_t));
+    printf(" :ioctl-cmd-bytes nil\n");
+    printf(" :ioctl-arg-bytes nil\n");
 #endif
 
     printf(" :const {\n");
@@ -140,6 +149,19 @@ int main(void) {
     K(":f-setfl", F_SETFL);
 #else
     KNIL(":o-nonblock"); KNIL(":f-getfl"); KNIL(":f-setfl");
+#endif
+    /* Windows has no fcntl; non-blocking mode is ioctlsocket(FIONBIO). Guarded
+       on _WIN32 rather than on `#ifdef FIONBIO` because POSIX also defines a
+       FIONBIO (in <sys/ioctl.h>, which this probe does not include) with a
+       different value -- keying on the platform keeps this fact unambiguously
+       about the Winsock call. The header defines it as _IOW('f', 126, u_long),
+       whose value 0x8004667E does NOT fit a signed 32-bit int; the macro itself
+       casts to long, so print the signed long the ABI actually passes instead
+       of truncating it through this file's int-valued K(). */
+#ifdef _WIN32
+    printf("  :fionbio %ld\n", (long)FIONBIO);
+#else
+    KNIL(":fionbio");
 #endif
 #ifndef _WIN32
     K(":pollin", POLLIN);

@@ -27,6 +27,10 @@
    :handle-type :int                 ; POSIX fd
    :socklen-type :uint
    :nfds-type :size_t                ; glibc nfds_t is unsigned long
+   ;; POSIX reaches non-blocking mode through fcntl, not ioctlsocket, so these
+   ;; Winsock-only widths are absent rather than zero.
+   :ioctl-cmd-bytes nil
+   :ioctl-arg-bytes nil
    :invalid-handle -1
    :sin-len? false
 
@@ -39,7 +43,7 @@
            :shut-rd 0 :shut-wr 1 :shut-rdwr 2
            ;; Linux suppresses SIGPIPE per send() call; there is no SO_NOSIGPIPE.
            :msg-nosignal 16384 :so-nosigpipe nil
-           :o-nonblock 2048 :f-getfl 3 :f-setfl 4
+           :o-nonblock 2048 :f-getfl 3 :f-setfl 4 :fionbio nil
            :pollin 1 :pollout 4 :pollerr 8 :pollhup 16 :pollnval 32}
 
    :layout {:sockaddr-in {:size 16 :family 0 :port 2 :addr 4}
@@ -75,6 +79,11 @@
    :handle-type :uptr
    :socklen-type :int
    :nfds-type nil
+   ;; ioctlsocket(SOCKET, long cmd, u_long *argp). Probed, because NEITHER type
+   ;; is pointer-width here: both are 32 bits even on Win64. A pointer-width
+   ;; argument cell would leave half the value ioctlsocket reads uninitialized.
+   :ioctl-cmd-bytes 4
+   :ioctl-arg-bytes 4
    :invalid-handle 18446744073709551615  ; (2^64)-1, all bits one
    :sin-len? false
 
@@ -88,8 +97,12 @@
            :shut-rd 0 :shut-wr 1 :shut-rdwr 2
            ;; Windows has no SIGPIPE, so neither suppression mechanism exists.
            :msg-nosignal nil :so-nosigpipe nil
-           ;; non-blocking mode is ioctlsocket(FIONBIO), not fcntl
-           :o-nonblock nil :f-getfl nil :f-setfl nil}
+           ;; non-blocking mode is ioctlsocket(FIONBIO), not fcntl. FIONBIO is
+           ;; _IOW('f', 126, u_long) == 0x8004667E, which does not fit a signed
+           ;; 32-bit int; the header casts it to long, and this is that signed
+           ;; long value -- the exact bits the `long cmd` parameter must carry.
+           :o-nonblock nil :f-getfl nil :f-setfl nil
+           :fionbio -2147195266}
 
    :layout {:sockaddr-in {:size 16 :family 0 :port 2 :addr 4}
             :sockaddr-in6 {:size 28 :family 0 :port 2 :flowinfo 4 :addr 8 :scope-id 24}
@@ -128,6 +141,9 @@
    :handle-type :int
    :socklen-type :uint
    :nfds-type :uint                  ; Darwin nfds_t is unsigned int
+   ;; fcntl target: the Winsock ioctlsocket widths do not apply.
+   :ioctl-cmd-bytes nil
+   :ioctl-arg-bytes nil
    :invalid-handle -1
    ;; BSD-derived: sockaddr byte 0 is the struct length and byte 1 the family,
    ;; so sin_family sits at offset 1, not 0.
@@ -145,7 +161,7 @@
            ;; 0x4000) and SO_NOSIGPIPE per socket. This table originally said
            ;; MSG_NOSIGNAL was absent here -- CI probing a real Mac corrected it.
            :msg-nosignal 524288 :so-nosigpipe 4130
-           :o-nonblock 4 :f-getfl 3 :f-setfl 4
+           :o-nonblock 4 :f-getfl 3 :f-setfl 4 :fionbio nil
            :pollin 1 :pollout 4 :pollerr 8 :pollhup 16 :pollnval 32}
 
    :layout {:sockaddr-in {:size 16 :family 1 :port 2 :addr 4}
