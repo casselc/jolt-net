@@ -207,6 +207,16 @@ Stop after W1 and return the evidence. Do not begin W2.
 Branch `claude/windows-nonblocking-io` from reviewed W1
 `f0affc4fa80ac00313860789cc8b894564ecc3b1`.
 
+Status: accepted locally at revision `2cbd988`, branched from `8a5b3dd` (the
+docs-only descendant of the reviewed W1 commit that clarified this task's
+`ioctlsocket` acceptance bullet). Native Windows x86-64 passed the W2 gate
+55/55 and the W1 blocking gate 155/155, both with no skips. Linux passed the
+full Hegel-required gate 228/228 with no skips, the dependency-free W2 gate
+53/53 with no skips, and the dependency-free W1 gate 152/152 with its one
+not-applicable Winsock skip. All 31 bounded models were run through a
+standalone z3 5.0.0 and each matched its expected verdict. W3 may branch from
+this revision.
+
 Implement and probe `ioctlsocket(FIONBIO)`, Windows nonblocking accept/connect,
 `recv`, `send`, and `getsockopt(SO_ERROR)`. Preserve the existing value contract
 for would-block, EOF, in-progress, and connected states. Add real partial-slice,
@@ -253,6 +263,28 @@ Acceptance:
   suite pass under watchdogs; and
 - the proof/model trio, source anchors, platform evidence, branch commits, and
   clean status are recorded.
+
+### Evidence boundary handed to W3
+
+- There is **no readiness backend on Windows**. `try-connect` initiates and
+  `finish-connect!` completes, but nothing in production waits between them.
+  The W2 gate closes that gap only with test-local coordination: a server's
+  blocking `accept` as a real synchronization point where one exists, and
+  otherwise a bounded wait for a terminal VALUE whose exhaustion fails the
+  assertion. W3 owns the readiness-driven native integration and its evidence.
+- A listener switched to non-blocking mode by `try-accept` makes a subsequent
+  blocking `accept` report would-block on Windows, because `accept` there is
+  still the native blocking call rather than the POSIX close-wakeable poller
+  path. Reconciling those two paths belongs to W3's readiness lifecycle. No
+  test in this slice depends on the current behavior.
+- The `ioctlsocket(FIONBIO)` postcondition is behavioral, not read back. Winsock
+  exposes no portable getter, so if W3 introduces one through `WSAPoll` state or
+  another mechanism, `jolt.net.nonblocking/postcondition-kind` is the seam to
+  revisit.
+- The two Windows runners were exiting 0 unconditionally before this task, so
+  any earlier "green" from them was the suite's printed text rather than a
+  process exit code. Both are fixed here; treat pre-W2 runner exit codes as
+  uninformative.
 
 Stop after W2 and return the evidence.
 
