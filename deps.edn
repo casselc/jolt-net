@@ -45,7 +45,15 @@
            ;; quietly required one would be proving POSIX behavior on a
            ;; Windows runner. See docs/WINDOWS-RUNTIME-SEQUENCE.md task W2.
            :nonblocking-test {:extra-paths ["test"]
-                              :main-opts ["-m" "jolt.net.nonblocking-test-main"]}}
+                              :main-opts ["-m" "jolt.net.nonblocking-test-main"]}
+           ;; Task W3. Same dependency-free rule as :blocking-test and
+           ;; :nonblocking-test. This one DOES exercise the poller's shared
+           ;; token machinery, but over the Windows WSAPoll readiness backend
+           ;; and through the internal wake-less adapter -- the public Windows
+           ;; poller is still fail-closed. See docs/WINDOWS-RUNTIME-SEQUENCE.md
+           ;; task W3.
+           :wsapoll-test {:extra-paths ["test"]
+                          :main-opts ["-m" "jolt.net.wsapoll-test-main"]}}
 
  ;; Deliberately NOT `joltc -M:test`: a bare `joltc` resolves to the stock
  ;; v0.4.15 on PATH, which cannot load this library at all.

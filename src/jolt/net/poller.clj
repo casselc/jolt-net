@@ -584,6 +584,41 @@
     (clock)
     (jolt.host/monotonic-nanos)))
 
+(defn- native-wait!
+  "Drive the native readiness wait against ONE caller-owned absolute monotonic
+  deadline. Returns the native ready count, or nil when a signal interrupted the
+  wait after the deadline had already passed.
+
+  Each individual native wait is capped at max-native-wait-ms so a missed
+  platform wake costs latency rather than making close unbounded; the ceiling is
+  a safety net, never an early return from the caller's timeout. An interruption
+  does not consume the timeout either -- it retries against the SAME absolute
+  deadline rather than restarting a relative one. A deadline-expired
+  interruption returns nil instead of a count because the native call may leave
+  revents undefined when it fails, so there is nothing safe to decode."
+  [poller buf n deadline]
+  (loop []
+    (let [remaining (max 0 (- deadline (monotonic-nanos poller)))
+          remaining-ms (quot (+ remaining 999999) 1000000)
+          wait-ms (min remaining-ms max-native-wait-ms)
+          outcome (poll-once poller buf n wait-ms)
+          result (:result outcome)]
+      (cond
+        (neg? result)
+        (let [code (:code outcome)]
+          (if (= code (t/errno-code d :eintr))
+            (if (< (monotonic-nanos poller) deadline)
+              (recur)
+              nil)
+            (throw (err/native-ex (:op r/backend) code nil))))
+
+        (and (zero? result)
+             (pos? remaining)
+             (< (monotonic-nanos poller) deadline))
+        (recur)
+
+        :else result))))
+
 (defn await-ready
   "Wait up to timeout-ms for readiness and return
   [{:token token :events #{:read ...}} ...].
@@ -650,56 +685,31 @@
               (doseq [[idx entry] (map-indexed vector entries)]
                 (r/encode! buf (+ base idx) (:raw entry) (:interests entry)))
               (let [deadline (+ (monotonic-nanos poller)
-                                (* timeout-ms 1000000))]
-                poll-result
-                (loop []
-                  (let [remaining (max 0 (- deadline
-                                            (monotonic-nanos poller)))
-                        remaining-ms (quot (+ remaining 999999) 1000000)
-                        wait-ms (min remaining-ms max-native-wait-ms)
-                        outcome (poll-once poller buf n wait-ms)
-                        result (:result outcome)]
-                    (cond
-                      (neg? result)
-                      (let [code (:code outcome)]
-                          ;; A signal does not consume the caller's timeout.
-                          ;; Retry against the same absolute monotonic deadline.
-                        (if (= code (t/errno-code d :eintr))
-                          (if (< (monotonic-nanos poller) deadline)
-                            (recur)
-                              ;; poll may leave revents undefined on failure.
-                              ;; A deadline-expired interruption is therefore a
-                              ;; timeout sentinel, not an empty native result.
-                            nil)
-                          (throw (err/native-ex :poll code nil))))
-
-                        ;; The ceiling is a lost-wake safety net, not an early
-                        ;; return from the caller's timeout.
-                      (and (zero? result)
-                           (pos? remaining)
-                           (< (monotonic-nanos poller) deadline))
-                      (recur)
-
-                      :else result))))
-              (if (nil? poll-result)
-                [(do
-                   (when wake?
-                     (let [wake-bits (r/revents buf 0)]
-                       (when-not (zero? wake-bits)
-                         (drain-wake-pipe! poller (:raw wl)))))
-                   (drain-mutations! poller)
-                   (reduce
-                    (fn [ready [idx entry]]
-                      (let [bits (r/revents buf (+ base idx))
-                            events (r/event-set bits)]
-                        (if (and (seq events)
-                                 (current-token? poller (:token entry)))
-                          (conj ready
-                                {:token (:token entry) :events events})
-                          ready)))
-                    []
-                    (map-indexed vector entries)))]))
-            (finally (ffi/free buf))))
+                                (* timeout-ms 1000000))
+                    poll-result (native-wait! poller buf n deadline)]
+                (if (nil? poll-result)
+                  []
+                  (do
+                    (when wake?
+                      (let [wake-bits (r/revents buf 0)]
+                        (when-not (zero? wake-bits)
+                          (drain-wake-pipe! poller (:raw wl)))))
+                    (drain-mutations! poller)
+                    ;; Every event is gated on current-token?: a snapshot taken
+                    ;; before the native wait may name a registration that has
+                    ;; since been updated, removed, or replaced by a different
+                    ;; socket reusing the descriptor.
+                    (reduce
+                     (fn [ready [idx entry]]
+                       (let [bits (r/revents buf (+ base idx))
+                             events (r/event-set bits)]
+                         (if (and (seq events)
+                                  (current-token? poller (:token entry)))
+                           (conj ready {:token (:token entry) :events events})
+                           ready)))
+                     []
+                     (map-indexed vector entries)))))
+              (finally (ffi/free buf)))))
         (finally
           (doseq [lease @socket-leases] (h/release! lease))
           (when-let [lease @wake-lease] (h/release! lease))
