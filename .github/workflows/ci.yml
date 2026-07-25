@@ -69,6 +69,14 @@ jobs:
             artifact: windows-x86-64
             expected_os: windows
             expected_arch: x86-64
+            # The probe takes the ADDRESS of WSAPoll to pin that function's
+            # exact declared signature, so the symbol has to resolve at link
+            # time even though the probe opens no socket. Winsock lives in
+            # ws2_32 rather than the default libc set, so MinGW needs it named
+            # explicitly. The ARM64 preview links the MSVC equivalent for the
+            # same reason. No other target has a Winsock dependency, so this key
+            # is absent for them and expands to nothing.
+            probe_libs: -lws2_32
     steps:
       - uses: actions/checkout@v4
 
@@ -83,7 +91,7 @@ jobs:
           [ -n "$cc" ] || { echo "no C compiler found"; exit 1; }
           echo "using $cc"
           mkdir -p tools/probed
-          "$cc" -O0 -o probe tools/probe-constants.c
+          "$cc" -O0 -o probe tools/probe-constants.c ${{ matrix.probe_libs }}
           # Strip CR so Windows output is comparable to the others.
           ./probe | tr -d '\r' > probe.edn
           cat probe.edn
