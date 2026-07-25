@@ -67,7 +67,7 @@ Ownership transfers with both `net/connected` and `net/in-progress`; neither
 
 **jolt-net does not build on released `joltc` v0.4.15.** It currently pins the
 reviewed `casselc/jolt` proposal fork at
-`e749f154` and depends on seven primitives added
+`e749f154c44ea40c7333b19dccc796cb869ccbd6` and depends on seven primitives added
 there:
 
 - `(jolt.host/target)` — the target descriptor, for fail-closed platform tables;
@@ -81,7 +81,8 @@ there:
   Apple arm64.
 - `{:capture-native-error true}` on `jolt.ffi/defcfn` — returns the native
   result and its matching `errno`/Windows last-error value as one pair before a
-  collect-safe call can reactivate the runtime and clobber the error slot.
+  return-boundary action, lazy resolution, cleanup, or another foreign call can
+  clobber the error slot.
 
 Run everything through `bin/jnc`, which pins the fork and fails with a readable
 message rather than an unbound-var error:
@@ -102,9 +103,11 @@ decisions:
   `::in-progress` are tagged returns; only genuine failures throw, and they throw
   `ExceptionInfo` carrying a small closed `:kind` set plus the native `:code` —
   which is preserved even when no kind maps to it.
-- **Capture precedes cleanup.** `errno` is valid only until the next native call,
-  and `close()` is a native call. Every failure path reads the error before rolling
-  anything back. This is enforced structurally by a combinator, not by convention.
+- **A failure sentinel and its error are one result.** `errno`/Windows
+  last-error is valid only until intervening runtime or native work. Every
+  sentinel-returning call whose error is consumed uses an atomic
+  `[result native-error]` foreign return; only error-independent `close` remains
+  on the scalar dispatch surface.
 - **Handles are opaque and idempotently closed.** A raw descriptor is available for
   diagnostics but conveys no ownership. Short operation leases prevent native
   close while a syscall is using the descriptor, and close rejects new leases

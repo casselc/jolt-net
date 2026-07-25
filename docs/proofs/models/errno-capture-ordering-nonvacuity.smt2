@@ -1,7 +1,7 @@
 ; Non-vacuity control for errno-capture-ordering-corrected.smt2.
 ;
 ; UNSAT there is meaningful only if the corrected model still describes a REAL
-; scenario -- one where runtime reactivation and cleanup genuinely overwrite
+; scenario -- one where intervening return work and cleanup genuinely overwrite
 ; the slot after the foreign return. Were the constraints contradictory for an
 ; unrelated reason, the proof would hold for free and prove nothing.
 ;

@@ -6,7 +6,7 @@ accepted design spike.
 
 ## Fork prerequisites
 
-jolt-net cannot load on released `joltc` v0.4.15. It requires six primitives added
+jolt-net cannot load on released `joltc` v0.4.15. It requires seven primitives added
 on the fork branch `codex/upstream-improvements-6-8`:
 
 | Primitive | Commit | Why jolt-net needs it |
@@ -17,7 +17,7 @@ on the fork branch `codex/upstream-improvements-6-8`:
 | `jolt.ffi/errno` | `5422ee9d` | The whole error contract rests on reading the native error before any other native call. |
 | `jolt.ffi/with-byte-array-pointer` | `1c8fdb97` | Pins a validated interior array slice for one callback, eliminating partial-I/O allocation and copying without exposing an unsafe retained pointer. |
 | `{:varargs-after n}` on `jolt.ffi/defcfn` | `ecf7728f` | Lowers an explicit fixed/variadic boundary to Chez. Apple arm64 passes `fcntl`'s third argument according to the variadic ABI even though its Jolt type is known. |
-| `{:capture-native-error true}` on `jolt.ffi/defcfn` | `b8229737`, corrected by `01023d9f` | Returns `[result native-error]` from the foreign return boundary, before collect-safe runtime reactivation can clobber POSIX `errno` or Windows last-error state. Blocking socket operations must consume this paired return rather than call `jolt.ffi/errno` afterward. |
+| `{:capture-native-error true}` on `jolt.ffi/defcfn` | `b8229737`, corrected by `01023d9f` | Returns `[result native-error]` from the foreign return boundary, before later runtime or native work can clobber POSIX `errno` or Windows last-error state. Every sentinel-returning operation whose error is consumed must use this pair rather than call `jolt.ffi/errno` afterward. |
 
 These live in the proposed fork rather than inside jolt-net because each is a
 shared FFI/host platform concern. Nothing in this branch has been pushed to the

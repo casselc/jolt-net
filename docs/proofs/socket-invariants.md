@@ -99,45 +99,50 @@ that *failed*, not of runtime reactivation or cleanup that ran afterward.
 **Why it needs a proof.** `errno`/Windows last-error is a per-thread slot that is
 valid only until intervening runtime or native work. A collect-safe foreign call
 may reactivate the Scheme runtime before source code can call an error accessor;
-`close()`, `free()`, and `closesocket()` can then overwrite it again during
-rollback. So lexical adjacency in Scheme is insufficient for a blocking call.
+first-use binding/resolution paths can also disturb the slot; `close()`, `free()`,
+and `closesocket()` can then overwrite it again during rollback. So lexical
+adjacency in Scheme is not a sufficient foreign-call contract.
 This is not hypothetical: `teensyp.ffi-net`'s constructors call `close` before
 reading `errno`, so a failed `bind` can report whatever `close` happened to set.
-The first Windows W1 probe found the stronger form: blocking `connect` returned
-failure, yet a later `WSAGetLastError` observed zero.
+Windows W1 found both forms before cleanup: blocking `connect` returned failure
+but a later `WSAGetLastError` observed zero, and after that path was paired, the
+first duplicate `bind` also reported zero while a later duplicate bind happened
+to retain `10048`.
 
-**Design.** Failure-sensitive blocking bindings opt into core
-`{:capture-native-error true}` and live only in
+**Design.** Every sentinel-returning binding whose error slot is consumed opts
+into core `{:capture-native-error true}` and lives only in
 `jolt.net.ffi/captured-call`; `invoke-captured` always returns
 `[native-result native-error]`. The scalar `call`/`invoke` surface has a
-different, invariant result shape. `checked-captured` consumes only the pair
-and ignores stale error state on success. Blocking `accept`, `connect`,
-`recv`, `send`, `poll`, and `getaddrinfo` use the captured table; POSIX
-`getaddrinfo` consults the second element only for `EAI_SYSTEM`.
-
-Ordinary nonblocking calls may still use `checked`/`capture`, whose lexical
-capture precedes rollback cleanup. They never stand in for the collect-safe
-foreign-return boundary.
+different, invariant result shape and owns only error-independent `close`.
+`checked-captured` consumes only the pair and ignores stale error state on
+success. Socket creation, bind/listen, endpoint inspection, options, blocking
+and nonblocking accept/connect/read/write, `fcntl`, pipe wake, `poll`, shutdown,
+and `getaddrinfo` all use the captured table. POSIX `getaddrinfo` consults the
+second element only for `EAI_SYSTEM`; `WSAStartup` remains scalar because its
+nonzero return value is itself the error.
 
 **Result.**
 
 - `errno-capture-ordering-buggy.smt2` — **sat**. Counterexample:
-  `fail_code=1`, `cleanup_code=2`, `reported=2`.
+  `fail_code>0`, intervening return work leaves `0`, and late capture reports
+  `0`.
 - `errno-capture-ordering-corrected.smt2` — **unsat**, with core
-  `{failing_call_sets_errno, capture_before_cleanup, property_violated}`.
+  `{failing_call_sets_errno, capture_in_foreign_return, reported_from_pair,
+  property_violated}`.
   The core is the informative part: the property follows from the capture
-  ordering *alone* and does not depend on the cleanup's code at all.
+  boundary *alone* and does not depend on later work or cleanup's code at all.
 - `errno-capture-ordering-nonvacuity.smt2` — **sat**. Witness has
-  `errno_after_cleanup=2 ≠ errno_after_fail=1` and `reported=1`: a real clobber
-  occurred, and the failure's own code was still reported.
+  `errno_after_reactivation=0 ≠ errno_after_fail=1` and `reported=1`: a real
+  clobber occurred, and the failure's own code was still reported.
 
 These models abstract the capture boundary as an ordering fact; they do not
 prove Chez's `__errno`/`__get_last_error` convention. The core FFI tests and
 `docs/ffi-native-error-capture.md` establish that source oracle. jolt-net adds
 deterministic controls for paired success/failure, `poll`, and POSIX
 `EAI_SYSTEM`; the real socket suite requires double bind to report
-`EADDRINUSE` and native Windows refused connect to report `10061`, both after
-their rollback paths.
+`EADDRINUSE`. Native Windows revision `11142a3` reports exact refused-connect
+`10061` and first-attempt duplicate-bind `10048` in the same process, with no
+post-call error accessor and before rollback cleanup.
 
 ---
 

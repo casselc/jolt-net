@@ -32,7 +32,7 @@ Three more files were added on 2026-07-24 for task W1
 
 | Model | Expected | Essential witness or unsat core |
 |---|---:|---|
-| `errno-capture-ordering-buggy.smt2` | `sat` | failure is positive, runtime reactivation leaves `0`, late capture reports `0` |
+| `errno-capture-ordering-buggy.smt2` | `sat` | failure is positive, intervening return work leaves `0`, late capture reports `0` |
 | `errno-capture-ordering-corrected.smt2` | `unsat` | `failing_call_sets_errno`, `capture_in_foreign_return`, `reported_from_pair`, `property_violated` |
 | `errno-capture-ordering-nonvacuity.smt2` | `sat` | failure `1`, runtime reactivation `0`, captured pair still reports `1` |
 | `idempotent-close-buggy.smt2` | `sat` | both callers win; `close_count = 2` |
@@ -136,6 +136,14 @@ winsock init once corrected:
   t1_observation_definition t2_observation_definition
   violation_definition violation_query
 ```
+
+Native Windows W1 supplies two concrete witnesses for the error-ordering
+abstraction. Before the generalized fix, a blocking refused connect lost
+`10061`; after only blocking calls were paired, the first ordinary duplicate
+bind lost `10048` while a later attempt happened to retain it. Revision
+`11142a3` routes every sentinel-returning call whose error is consumed through
+the captured-pair surface and passed both exact-code assertions in one native
+process.
 
 ## Source and runtime oracles
 

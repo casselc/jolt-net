@@ -1,9 +1,9 @@
 ; Invariant: the error a caller reports is the error of the operation that
-; FAILED, not the value left after collect-safe runtime reactivation.
+; FAILED, not the value left after intervening runtime/FFI return work.
 ;
-; This models the Windows W1 defect: blocking connect fails, the runtime
-; reactivates, and a source-level WSAGetLastError read observes a different
-; value (zero in the concrete witness) even before rollback cleanup.
+; This models both Windows W1 defects: blocking connect and a first-use bind
+; fail, then a source-level WSAGetLastError read observes a different value
+; (zero in the concrete witnesses) even before rollback cleanup.
 ;
 ; errno/last-error is a per-thread slot, valid only until intervening runtime or
 ; native work.
@@ -32,7 +32,7 @@
 (assert (= errno_after_cleanup cleanup_code))
 
 ; BUGGY BOUNDARY: the "capture" is a separate source-level accessor after
-; runtime reactivation, so it pairs the failed result with the wrong slot.
+; intervening return work, so it pairs the failed result with the wrong slot.
 (assert (! (= captured_code errno_after_reactivation)
            :named buggy_capture_after_reactivation))
 (assert (! (= reported captured_code) :named reported_from_late_capture))

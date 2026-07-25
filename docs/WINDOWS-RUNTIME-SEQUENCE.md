@@ -95,12 +95,14 @@ independently.
    friction at the lowest appropriate layer; do not hide an absent primitive
    with an unsafe higher-level workaround.
 
-   Blocking foreign calls must declare
-   `{:blocking true :capture-native-error true}` and consume an explicit
-   `[result native-error]` pair. Keep scalar and captured call tables/APIs
-   separate: one dispatch function must never return a scalar for some
-   operations and a pair for others. An error accessor called after a
-   collect-safe return is not an atomic capture.
+   Every sentinel-returning foreign call whose error slot is consumed must
+   declare `{:capture-native-error true}` and consume an explicit
+   `[result native-error]` pair, whether or not it is `:blocking`. Keep scalar
+   and captured call tables/APIs separate: one dispatch function must never
+   return a scalar for some operations and a pair for others. `WSAStartup` is
+   different because its return value is the error; error-independent
+   `closesocket` may remain scalar. A later error accessor is not an atomic
+   capture.
 
 5. Do not weaken or skip POSIX tests. Run the Linux suite after the native
    Windows slice passes.
@@ -124,11 +126,12 @@ the required host-execution permission instead of changing the implementation.
 
 ## Task W1: initialize Winsock and prove the blocking socket base
 
-Branch: `claude/windows-blocking-sockets`
+Branch: `codex/windows-runtime-w1`
 
-Status: implementation review/integration in progress. W1 is not accepted and
-W2 must not branch until every acceptance gate below is green on one committed
-revision.
+Status: accepted locally at revision `11142a3`. The native Windows x86-64 gate
+passed 149/149 with no skips; Linux passed the dependency-free gate 146/146
+with its one not-applicable Winsock skip and the full Hegel-required gate
+222/222 with no skips. W2 may branch from this revision.
 
 Scope:
 
@@ -140,9 +143,11 @@ Scope:
   protocol.
 - Keep `WSAStartup`'s returned error code distinct from
   `WSAGetLastError`.
-- Consume atomic `[result native-error]` returns for blocking `accept`,
-  `connect`, `poll`, and `getaddrinfo`'s `EAI_SYSTEM` path. Preserve the
-  scalar-only call API for ordinary/nonblocking calls.
+- Consume atomic `[result native-error]` returns for every sentinel-returning
+  call whose error is classified, including socket creation, bind/listen,
+  endpoint inspection, options, blocking and nonblocking calls, wake calls,
+  `poll`, and `getaddrinfo`'s `EAI_SYSTEM` path. Preserve a disjoint scalar-only
+  call API for error-independent operations.
 - Keep subsystem ownership process-scoped. Individual sockets must not call
   `WSACleanup`.
 - Exercise real native IPv4 listen, connect, accept, local/peer endpoint

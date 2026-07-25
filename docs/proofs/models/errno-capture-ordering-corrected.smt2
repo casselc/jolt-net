@@ -1,7 +1,7 @@
 ; Same invariant with the ordering enforced by
 ; {:capture-native-error true}: the native result and error are paired in the
-; foreign return transition, before collect-safe runtime reactivation or
-; rollback can overwrite the thread's slot.
+; foreign return transition, before later runtime/FFI work or rollback can
+; overwrite the thread's slot.
 ;
 ; VERIFIED: unsat. Expected core:
 ;   failing_call_sets_errno, capture_in_foreign_return, reported_from_pair,

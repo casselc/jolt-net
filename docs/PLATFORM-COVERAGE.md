@@ -12,6 +12,7 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 | **runtime** | Real sockets opened, real syscalls made, on this platform in CI. |
 | **candidate** | Implemented from probed ABI facts and assigned to a native CI gate, but that gate has not yet validated this exact revision. |
 | **probed** | `tools/probe-constants.c` compiled against that platform's real system headers and **executed**, so every constant, `sizeof`, and `offsetof` is read from the platform itself and diffed against the committed table. Proves the numbers; proves nothing about calls. |
+| **configured** | A native evidence job exists on this revision, but no successful run/artifact has yet been observed. |
 | **preview artifact** | A native non-gating job produces probe evidence, but the artifact has not yet been reviewed into a committed descriptor. |
 | **table** | Only the selection logic is exercised. The numbers themselves are unverified. |
 | **none** | Not covered. |
@@ -22,8 +23,8 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 |---|---|---|---|---|
 | Linux x86-64 | **probed** | **runtime** | **runtime** | The development and CI platform. Real `fcntl`, `poll`, pipe-wake, sliced byte I/O, EOF, non-blocking connect/`SO_ERROR`, mutation wake, and close races are exercised. |
 | Linux aarch64 | **candidate** | **candidate** | **candidate** | Has its own `ubuntu-24.04-arm` ABI-probe and full-runtime jobs. The descriptor explicitly aliases the x86-64 socket facts (same kernel UAPI and LP64), and the arm64 job diffs every freshly probed fact against that alias before running real sockets. Keep this row at candidate until that native job is observed green. |
-| Windows x86-64 | **probed** | **candidate** | none | The portable hosted gate loads native Chez/Jolt and exercises descriptor/address logic. Separately, `tools/test-windows-blocking.ps1` has made real local Winsock calls: initialization, IPv4/IPv6 loopback listen/connect/accept, port-zero, endpoint inspection, duplicate bind, and idempotent close. Keep this row at candidate until the socket suite is a hosted gate on the exact revision. |
-| Windows aarch64 | **preview artifact** | none | none | A non-gating `windows-11-vs2026-arm` job builds native `tarm64nt` Chez 10.4.1, compiles and executes the probe with ARM64 MSVC, asserts the probe and source Jolt both report `:aarch64`, and uploads `windows-aarch64.edn`. No descriptor is committed from assumed x64 similarity: until the artifact is reviewed, target selection is required to fail closed. |
+| Windows x86-64 | **probed** | **candidate** | none | A portable hosted gate is configured to load native Chez/Jolt and exercise descriptor/address logic. Separately, `tools/test-windows-blocking.ps1` has made real local Winsock calls: initialization, IPv4/IPv6 loopback listen/connect/accept, port-zero, endpoint inspection, duplicate bind, and idempotent close. Keep this row at candidate until the socket suite is a hosted gate on the exact revision. |
+| Windows aarch64 | **configured** | none | none | A non-gating `windows-11-vs2026-arm` job is configured to build native `tarm64nt` Chez 10.4.1, compile and execute the probe with ARM64 MSVC, assert the probe and source Jolt both report `:aarch64`, and upload `windows-aarch64.edn`. No descriptor is committed from assumed x64 similarity: until a successful artifact is reviewed, target selection is required to fail closed. |
 | macOS arm64 | **probed** | **runtime** | **runtime** | The complete native suite passes with source-built Chez 10.4.1: variadic-ABI-correct `fcntl`, `poll(2)`, non-blocking connect/`SO_ERROR`, sliced byte I/O, SIGPIPE, close races, and the owner-independent self-pipe protocol, with Darwin's distinct 32-bit `nfds_t` binding. |
 | macOS x86-64 | **candidate** | **candidate** | **candidate** | Has its own `macos-15-intel` probe and full-runtime jobs. The live x86_64 probe is uploaded and reported as a new artifact, then explicitly normalized and diffed against the shared Darwin descriptor. Keep this row at candidate until both jobs are observed green. |
 
@@ -47,18 +48,17 @@ Do not summarize this file as "supports Linux, macOS and Windows."
   promise; see
   `docs/proofs/socket-invariants.md` §0 and
   `docs/proofs/models/winsock-init-once-*.smt2`.
-- **Refused-connect native code (`WSAECONNREFUSED` / 10061) exposed an atomic
-  capture prerequisite.** A raw
+- **Refused-connect and first-use duplicate-bind exposed the full atomic capture
+  prerequisite.** A raw
   `socket()`/`connect()` probe below the `jolt.net` API showed `connect()`
   genuinely returning `-1`, but three immediate, consecutive
-  `WSAGetLastError()` reads afterward all returning `0`. Non-`:blocking` calls
-  on the same target (`bind`/`listen`, duplicate-bind's real `10048`) correctly
-  preserve their codes. This isolates the clobber to the `:blocking`
-  (collect-safe) calling convention: by the time Scheme can call a separate
-  error accessor, runtime reactivation may have overwritten the slot. The core
-  fork now provides `{:capture-native-error true}`, which returns the result and
-  matching error atomically. W1 is not accepted until jolt-net consumes that
-  pair and the native assertion observes exactly `10061`.
+  `WSAGetLastError()` reads afterward all returning `0`. Pairing only blocking
+  calls then exposed a second witness: the first duplicate `bind` reported code
+  `0`, while a later duplicate bind happened to retain `10048`. The sound rule
+  is therefore independent of `:blocking`: every sentinel-returning call whose
+  error is consumed returns `[result native-error]` atomically. On revision
+  `11142a3`, the native W1 suite observed exact `10061` and `10048` in the same
+  process; scalar dispatch owns only error-independent `close`.
 - **Windows ARM64 evidence boundary.** The hosted runner includes an x86_64
   MinGW gcc that can run under emulation. The preview therefore invokes
   `cl.exe` only after selecting the MSVC `x64_arm64` environment and rejects
@@ -135,11 +135,11 @@ The table test is non-vacuous: corrupting `AF_INET6` or swapping
 
 ## Making this better
 
-The remaining gap is Windows *socket-runtime* coverage. CI source-builds Chez
+The remaining gap is hosted Windows *socket-runtime* coverage. CI source-builds Chez
 and runs Jolt on Windows x86-64, and a non-gating native ARM64 preview produces
 the missing ABI artifact while proving unreviewed selection fails closed. The
 x86-64 hosted job intentionally stops at portable target/address checks while
-W1 remains a locally validated candidate; task W5 promotes the PowerShell
+W1 is a locally validated candidate; task W5 promotes the PowerShell
 socket suite to hosted evidence after W2-W4 complete the portable readiness and
 close lifecycle. ARM64 cannot load descriptor-backed namespaces until its probe
 is reviewed and committed.

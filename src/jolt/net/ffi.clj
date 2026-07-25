@@ -188,7 +188,8 @@
          args))
 
 (defn invoke-captured
-  "Call a failure-sensitive binding that atomically returns
+  "Call a sentinel-returning binding whose error is consumed, atomically
+  returning
   `[native-result native-error]`.
 
   This is deliberately separate from `invoke`: neither dispatcher has an
