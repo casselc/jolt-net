@@ -313,6 +313,16 @@ target rather than proving POSIX behavior under a Windows name. All 35 bounded
 models were run through a standalone z3 5.0.0 and matched their declared
 verdicts (13 unsat, 22 sat).
 
+Post-W3 review found that the wake-less close refusal read `:awaiting?` before
+its lifecycle CAS loop. An await could enter in between, after which close would
+transition to `:closing` and wait with no wake mechanism. The review branch
+`codex/windows-wsapoll-review` moves the refusal onto the exact lifecycle value
+used by the CAS, adds a deterministic admitted-await gate, and records
+buggy/corrected/non-vacuity models. Chiasmus reports `sat`/`unsat`/`sat` with the
+corrected four-label core recorded in the model index. The original native
+116-check W3 result remains valid evidence for the WSAPoll implementation; the
+expanded Windows gate must be rerun on the review tip before W4 branches.
+
 The public Windows poller is deliberately still fail-closed. Without an
 owner-independent wake transport, explicit `wake!`, blocked-await cancellation,
 and terminal close against a blocked await cannot be implemented honestly, so

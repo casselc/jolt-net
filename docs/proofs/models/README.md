@@ -57,6 +57,18 @@ because W3 moved the complete-token comparison out of the body of
 `jolt.net.poller/current-token?`. That is a relocation of the anchor, not a
 change to what is claimed.
 
+Post-W3 review found a separate-check/CAS race in the internal wake-less
+adapter's close refusal. Three models now bring the directory to 38:
+`windows-wakeless-close-race-buggy.smt2`,
+`windows-wakeless-close-race-corrected.smt2`, and
+`windows-wakeless-close-race-nonvacuity.smt2`. Chiasmus linted all three with no
+errors and verified the buggy interleaving `sat`, the corrected violation query
+`unsat`, and useful close without an active await `sat`. The corrected core is
+`atomic_close_guard_definition`, `corrected_close_transition_definition`,
+`violation_definition`, and `property_violated`. The standalone-Z3 count above
+remains the exact evidence for Claude's original 35-file W3 tip; it is not
+retroactively described as a run of these three review additions.
+
 ## Expected results
 
 | Model | Expected | Essential witness or unsat core |
@@ -75,6 +87,9 @@ change to what is claimed.
 | `readiness-current-token-nonvacuity.smt2` | `sat` | fd `8`, generation `10`, revision `3`, dispatch allowed |
 | `readiness-removed-registration.smt2` | `unsat` | `registration_removed_before_decode`, `dispatch_iff_present_and_token_matches`, `violation_iff_removed_registration_is_dispatched`, `property_violated` |
 | `readiness-stale-dispatch-buggy.smt2` | `sat` | descriptor `8` reused; generation `9 -> 10` and revision `3 -> 4` both dispatched because the token comparison is omitted |
+| `windows-wakeless-close-race-buggy.smt2` | `sat` | close observes no await, await enters before the CAS, and stale permission admits `:closing` with no wake transport |
+| `windows-wakeless-close-race-corrected.smt2` | `unsat` | the guard and CAS use one lifecycle value, so transition and active-await violation conflict |
+| `windows-wakeless-close-race-nonvacuity.smt2` | `sat` | with no admitted await, the wake-less adapter still transitions from `:open` to `:closing` |
 | `posix-nonblocking-transition-buggy.smt2` | `sat` | Apple arm64 witness: fixed declaration, successful return, absent bit, marked handle, blocking-capable admission |
 | `posix-nonblocking-transition-corrected.smt2` | `unsat` | variadic declaration plus per-handle `F_GETFL` read-back exclude both POSIX violation branches |
 | `posix-nonblocking-transition-nonvacuity.smt2` | `sat` | observed bit, marked handle, and useful short operation |
@@ -218,6 +233,12 @@ interleaving tests supply the semantic oracle:
   Note the boundary these models do NOT cross: nothing here claims a mutation
   can interrupt a native wait already in progress. On Windows there is no wake
   transport until task W4, so removal and update invalidate DISPATCH only.
+- `jolt.net.poller/close!` checks the wake-less active-await refusal against the
+  exact lifecycle value supplied to its CAS. The three
+  `windows-wakeless-close-race-*` models cover the one-await interleaving that a
+  separate precheck admitted, the corrected conflict, and useful close with no
+  active await. The native W3 test parks one await at the call seam and requires
+  refusal to leave the adapter open before releasing and closing it normally.
 - `jolt.net.ffi/p-fcntl` declares `{:varargs-after 2}`, and
   `jolt.net.nonblocking/set-raw!` reads `F_GETFL` back before any handle is
   marked. `test/jolt/net/poller_test.clj` independently observes the bit on a

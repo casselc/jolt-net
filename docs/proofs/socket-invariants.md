@@ -555,6 +555,45 @@ by these models.
 
 ---
 
+## 7. Wake-less close refusal and await admission share one atomic state
+
+**Bounded claim.** Until task W4 supplies a Windows wake transport, the internal
+W3 adapter may close only when no await is active. If an await is active, close
+must refuse while leaving the lifecycle `:open`; it may not enter `:closing` and
+wait for an operation it has no mechanism to interrupt. This claim covers one
+close and one competing await admission.
+
+**Counterexample and correction.** The original W3 implementation read
+`:awaiting?` before entering close's lifecycle CAS loop. A concrete interleaving
+was therefore possible: close observed false, await CASed the lifecycle to
+`{:phase :open :awaiting? true}`, then close CASed that newer value to
+`:closing` and waited with no wake transport. The corrected
+`jolt.net.poller/close!` examines `:awaiting?` on the exact value it either
+rejects or supplies to `compare-and-set!`. If await wins, close refuses. If
+close wins, the await admission CAS no longer sees `:open` and fails.
+
+**Models and controls.**
+`windows-wakeless-close-race-buggy.smt2` is `sat` with the interleaving above.
+`windows-wakeless-close-race-corrected.smt2` is `unsat`; its four-label core is
+the atomic guard, corrected transition, violation definition, and violation
+query. `windows-wakeless-close-race-nonvacuity.smt2` is `sat` with no admitted
+await and a useful transition to `:closing`. Chiasmus verified all three after
+linting them without errors.
+
+**Executable companion.** The Windows W3 gate constructs the real wake-less
+adapter, admits an await, and blocks it at the native-call seam. `close!` must
+throw `:windows-wake-transport` and leave the lifecycle `:open`; releasing the
+seam must still deliver the current token, after which close succeeds normally.
+Real `WSAPoll` behavior remains covered by the independent socket cases in the
+same suite.
+
+**Limit.** This is a refusal invariant for the temporary internal adapter, not
+the final Windows close protocol. W4 must replace the refusal with an
+owner-independent wake and must re-prove close completion, wake coalescing,
+admitted-writer retirement, and descriptor lifetime under that transport.
+
+---
+
 ## What is deliberately not modelled
 
 - **Resolver copy-before-free.** This is a memory-lifetime property, and the

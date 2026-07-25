@@ -18,7 +18,7 @@
 (def ^:private next-poller (atom 0))
 (def ^:private max-native-wait-ms r/max-native-wait-ms)
 
-(declare submit! signal-wake!)
+(declare submit! signal-wake! wake-transport?)
 
 (defn- unsupported! [op]
   (throw (ex-info (str "jolt.net " (name op)
@@ -339,9 +339,13 @@
           :else false)))))
 
 (defn close!
-  "Close a poller. Registered sockets are borrowed and remain open. A blocked
-  await is woken. The winning close does not return until that await exits and
-  both pipe descriptors are closed."
+  "Close a poller. Registered sockets are borrowed and remain open.
+
+  With a wake transport, a blocked await is woken and the winning close does
+  not return until that await exits and both wake descriptors are closed. The
+  internal wake-less Windows adapter instead refuses atomically while an await
+  is active; task W4 supplies the transport needed to make that case a
+  completion boundary."
   [poller]
   ;; Close is a COMPLETION boundary: it returns only after an active await has
   ;; exited, and on POSIX the retired wake pipe's HUP is what forces that exit.
@@ -349,33 +353,44 @@
   ;; refuses while an await is running rather than parking for the awaiting
   ;; caller's whole timeout and calling that "completion". Terminal close
   ;; against a blocked await is a W4 obligation.
-  (when (and (not (wake-transport? poller))
-             (:awaiting? @(:lifecycle poller)))
-    (throw (err/invalid-ex
-            :close
-            "this readiness adapter cannot terminate an active await without a wake transport"
-            {:jolt.net/requires :windows-wake-transport})))
-  (let [lifecycle (:lifecycle poller)]
+  (let [lifecycle (:lifecycle poller)
+        wake? (wake-transport? poller)]
     (loop []
       (let [old @lifecycle]
         (case (:phase old)
           :open
-          (if (compare-and-set! lifecycle old (assoc old :phase :closing))
+          ;; The wake-less refusal and the transition to :closing must inspect
+          ;; the SAME lifecycle value. A separate precheck admits this race:
+          ;; close reads awaiting=false, await CASes it true, then close CASes
+          ;; that newer value to :closing and waits forever with nothing able
+          ;; to interrupt WSAPoll.
+          (if (and (not wake?) (:awaiting? old))
+            (throw (err/invalid-ex
+                    :close
+                    "this readiness adapter cannot terminate an active await without a wake transport"
+                    {:jolt.net/requires :windows-wake-transport}))
             (do
-              (submit! poller {:op :clear})
-              (signal-wake! poller)
-              (retire-wake-writes! poller)
-              ;; Closing write makes the retained read end report HUP, so an
-              ;; active poll cannot remain parked. Wait for await's finally to
-              ;; release the read lease; the winning close is a completion
-              ;; boundary, not merely a stop request.
-              (loop []
-                (when (:awaiting? @lifecycle)
-                  (Thread/yield)
-                  (recur)))
-              (finish-close! poller)
-              true)
-            (recur))
+              ;; Deterministic forced-interleaving seam. Production pollers do
+              ;; not carry this key; the Windows W3 gate uses it to make an
+              ;; await admission win after this read and before the CAS.
+              (when-let [before-cas (:jolt.net/before-close-cas poller)]
+                (before-cas old))
+              (if (compare-and-set! lifecycle old (assoc old :phase :closing))
+                (do
+                  (submit! poller {:op :clear})
+                  (signal-wake! poller)
+                  (retire-wake-writes! poller)
+                  ;; Closing write makes the retained read end report HUP, so an
+                  ;; active poll cannot remain parked. Wait for await's finally
+                  ;; to release the read lease; the winning close is a
+                  ;; completion boundary, not merely a stop request.
+                  (loop []
+                    (when (:awaiting? @lifecycle)
+                      (Thread/yield)
+                      (recur)))
+                  (finish-close! poller)
+                  true)
+                (recur))))
           :closing false
           :closed false)))))
 

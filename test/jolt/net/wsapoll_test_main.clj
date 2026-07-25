@@ -551,6 +551,86 @@
         :jolt.net/requires :windows-wake-transport}
        #(poller/wake! p))))
 
+  (c/section "wsapoll: wake-less close refuses an admitted await atomically")
+  ;; First force the exact review interleaving: close reads open/unawaited, then
+  ;; an await admission wins before close's CAS. The failed CAS must retry
+  ;; against the new value and refuse; it must not carry permission from the
+  ;; stale read into :closing.
+  (let [p0 (poller/open-readiness-adapter)
+        interleaved? (atom false)
+        p (assoc
+           p0
+           :jolt.net/before-close-cas
+           (fn [old]
+             (when (compare-and-set! (:lifecycle p0)
+                                     old
+                                     (assoc old :awaiting? true))
+               (reset! interleaved? true))))]
+    (try
+      (c/check-throws
+       "an await winning between close read and CAS is refused"
+       {:jolt.net/kind :invalid
+        :jolt.net/requires :windows-wake-transport}
+       #(poller/close! p))
+      (c/check "the forced await admission won" true @interleaved?)
+      (c/check "the failed close never entered :closing"
+               {:phase :open :awaiting? true}
+               @(:lifecycle p))
+      (finally
+        ;; The forced admission models the lifecycle CAS only; no real waiter
+        ;; exists to run exit-await!, so retire it explicitly before cleanup.
+        (swap! (:lifecycle p) assoc :awaiting? false)
+        (poller/close! p))))
+
+  ;; Block at the native-call seam after await has atomically published
+  ;; :awaiting? true. This is a lifecycle gate, not another WSAPoll ABI oracle;
+  ;; the real waits above already establish that backend. Releasing the hook
+  ;; writes one genuine readiness word into the same encoded array so the
+  ;; admitted await can finish and the adapter can then close normally.
+  (let [entered (promise)
+        release (promise)
+        p0 (poller/open-readiness-adapter)
+        p (assoc
+           p0
+           :jolt.net/poll-call
+           (fn [buf _ _]
+             (deliver entered true)
+             @release
+             (jolt.ffi/write
+              buf :int16
+              (:revents (:layout r/backend))
+              (t/const d :pollin))
+             {:result 1}))
+        waiter (atom nil)]
+    (try
+      (with-pair!
+        (fn [_client server]
+          (let [token (poller/register! p server #{:read})
+                waiting (future (poller/await-ready p io-budget-ms))]
+            (reset! waiter waiting)
+            (c/check "await published its lifecycle admission before close"
+                     true (deref entered io-budget-ms timeout-token))
+            (c/check-throws
+             "wake-less close refuses instead of entering :closing"
+             {:jolt.net/kind :invalid
+              :jolt.net/requires :windows-wake-transport}
+             #(poller/close! p))
+            (c/check "a refused close leaves the adapter open"
+                     :open (:phase @(:lifecycle p)))
+            (deliver release true)
+            (let [ready (deref waiting io-budget-ms timeout-token)]
+              (c/check-pred "the admitted await completes after test release"
+                            vector? ready)
+              (c/check "the released await still dispatches its current token"
+                       token
+                       (when (and (vector? ready) (seq ready))
+                         (:token (first ready))))))))
+      (finally
+        (deliver release true)
+        (when-let [waiting @waiter]
+          (deref waiting io-budget-ms timeout-token))
+        (poller/close! p))))
+
   (c/section "wsapoll: W2 contracts are preserved, not resurrected")
   ;; WSAPoll must not become a blocking-mode getter. The W2 boundary stands.
   (with-listener!
