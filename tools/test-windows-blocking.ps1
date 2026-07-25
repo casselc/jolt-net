@@ -23,11 +23,16 @@
 
 .PARAMETER ChezExe
   Path to scheme.exe.
+
+.PARAMETER TimeoutSeconds
+  Outer process timeout. The Jolt test main has its own shorter watchdog; this
+  one also bounds failures before that main starts.
 #>
 param(
   [string]$JoltNetPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
   [string]$RuntimePath = "D:\src\jolt-proposal-net-runtime",
-  [string]$ChezExe = "D:\chez-10.4.1\bin\scheme.exe"
+  [string]$ChezExe = "D:\chez-10.4.1\bin\scheme.exe",
+  [int]$TimeoutSeconds = 90
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,6 +42,9 @@ if (-not (Test-Path $ChezExe)) {
 }
 if (-not (Test-Path (Join-Path $RuntimePath "host\chez\cli.ss"))) {
   throw "test-windows-blocking.ps1: host\chez\cli.ss not found under $RuntimePath"
+}
+if ($TimeoutSeconds -le 0) {
+  throw "test-windows-blocking.ps1: TimeoutSeconds must be positive"
 }
 
 $env:JOLT_PWD = $JoltNetPath
@@ -48,12 +56,34 @@ Write-Host "jolt-net blocking suite"
 Write-Host "  JOLT_PWD      = $env:JOLT_PWD"
 Write-Host "  runtime       = $RuntimePath"
 Write-Host "  scheme.exe    = $ChezExe"
+Write-Host "  timeout       = $TimeoutSeconds seconds"
 Write-Host ""
 
 Push-Location $RuntimePath
 try {
-  & $ChezExe --script "host\chez\cli.ss" "-M:blocking-test"
-  $exitCode = $LASTEXITCODE
+  $process = Start-Process `
+    -FilePath $ChezExe `
+    -ArgumentList @("--script", "host\chez\cli.ss", "-M:blocking-test") `
+    -NoNewWindow `
+    -PassThru
+  if ($process.WaitForExit($TimeoutSeconds * 1000)) {
+    $exitCode = $process.ExitCode
+  }
+  else {
+    [Console]::Error.WriteLine(
+      "test-windows-blocking.ps1: timed out after $TimeoutSeconds seconds; terminating PID $($process.Id)"
+    )
+    try {
+      $process.Kill()
+      $process.WaitForExit()
+    }
+    catch {
+      [Console]::Error.WriteLine(
+        "test-windows-blocking.ps1: failed to terminate timed-out PID $($process.Id): $($_.Exception.Message)"
+      )
+    }
+    $exitCode = 124
+  }
 }
 finally {
   Pop-Location

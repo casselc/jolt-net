@@ -9,10 +9,11 @@
   child process -- so socket-runtime work can be proved independently of that
   dependency-resolution path.
 
-  The Winsock once-only stress test below runs FIRST and before any other
-  namespace's resolve/listen call, so it observes a genuine first use: later
-  checks (including the resolver's own tests) run against an already-memoized
-  subsystem, which is exactly the steady-state path production code takes."
+  The process-global Winsock once-only stress below is the first real Winsock
+  use and runs before any other namespace's resolve/listen call, so it observes
+  a genuine first use. The preceding injected controls use fresh private state
+  and no native call. Later checks run against the already-memoized subsystem,
+  which is exactly the steady-state path production code takes."
   (:require [jolt.net.check :as c]
             [jolt.net.ffi :as nffi]
             [jolt.net :as net]
@@ -21,6 +22,62 @@
             [jolt.net.resolver-test :as resolver-test]))
 
 (defn- windows? [] (= :windows (:os (jolt.host/target))))
+
+(def ^:private wait-timeout-ms 5000)
+(def ^:private suite-timeout-ms 60000)
+(def ^:private timeout-token ::timeout)
+
+(defn- capture-call [f]
+  (try
+    {:value (f)}
+    (catch :default e {:error e})))
+
+(defn- injected-init-controls!
+  "Exercise both failure shapes against fresh state, without touching the
+  process-global Winsock subsystem. A second call is timed so the regression
+  where a thrown attempt leaves an unresolved promise fails diagnostically
+  instead of hanging the suite."
+  []
+  (c/section "winsock: deterministic initialization failure controls")
+  (doseq [[label make-attempt]
+          [["returned native error"
+            (fn [attempts expected]
+              (fn []
+                (swap! attempts inc)
+                {:error expected}))]
+           ["thrown boundary exception"
+            (fn [attempts expected]
+              (fn []
+                (swap! attempts inc)
+                (throw expected)))]]]
+    (let [state (atom nil)
+          attempts (atom 0)
+          expected (ex-info (str "injected " label)
+                            {:jolt.net/op :wsa-startup
+                             :jolt.net/test-outcome label})
+          attempt (make-attempt attempts expected)
+          first-result (capture-call #(nffi/ensure-once! state attempt))
+          later-result (deref
+                         (future
+                           (capture-call #(nffi/ensure-once! state attempt)))
+                         wait-timeout-ms
+                         timeout-token)]
+      (c/check (str label ": exactly one initialization attempt")
+               1 @attempts)
+      (c/check-pred (str label ": first caller observes the injected exception")
+                    #(identical? expected (:error %))
+                    first-result)
+      (c/check-pred (str label ": later caller does not strand on an in-flight promise")
+                    #(not= timeout-token %)
+                    later-result)
+      (when (not= timeout-token later-result)
+        (c/check-pred (str label ": later caller observes the same memoized exception")
+                      #(identical? expected (:error %))
+                      later-result))
+      (c/check-pred (str label ": shared state is terminal and retains that exception")
+                    #(and (map? %)
+                          (identical? expected (:error %)))
+                    @state))))
 
 (defn- winsock-init-stress!
   "Concurrent first callers must perform exactly one WSAStartup and all must
@@ -33,17 +90,34 @@
     (c/skip "concurrent WSAStartup stress test"
             "ensure-subsystem! is a no-op on POSIX; nothing to race")
     (let [n 32
-          futures (doall (repeatedly n #(future (nffi/ensure-subsystem!))))
-          results (mapv deref futures)]
-      (c/check-pred "every concurrent caller observed successful initialization"
-                    #(every? true? %) results)
-      (c/check "exactly one WSAStartup attempt was made for N concurrent first callers"
-               1 (nffi/winsock-startup-attempts))
-      ;; a caller arriving strictly after the race must reuse the same
-      ;; memoized outcome, not attempt a second WSAStartup
-      (c/check "a later caller reuses the memoized outcome" true (nffi/ensure-subsystem!))
-      (c/check "the later caller triggered no additional attempt"
-               1 (nffi/winsock-startup-attempts)))))
+          ready (java.util.concurrent.CountDownLatch. n)
+          start (promise)
+          futures
+          (doall
+            (repeatedly
+              n
+              #(future
+                 (.countDown ready)
+                 @start
+                 (nffi/ensure-subsystem!))))]
+      ;; Every distinct entrant has reached the common gate before any is
+      ;; released into ensure-subsystem!, so this actually exercises concurrent
+      ;; first use rather than merely launching futures in a loop.
+      (.await ready)
+      (c/check "every first-use entrant reached the start barrier"
+               0 (.getCount ready))
+      (deliver start true)
+      (let [results
+            (mapv #(deref % wait-timeout-ms timeout-token) futures)]
+        (c/check-pred "every concurrent caller observed successful initialization"
+                      #(every? true? %) results)
+        (c/check "exactly one WSAStartup attempt was made for N concurrent first callers"
+                 1 (nffi/winsock-startup-attempts))
+        ;; a caller arriving strictly after the race must reuse the same
+        ;; memoized outcome, not attempt a second WSAStartup
+        (c/check "a later caller reuses the memoized outcome" true (nffi/ensure-subsystem!))
+        (c/check "the later caller triggered no additional attempt"
+                 1 (nffi/winsock-startup-attempts))))))
 
 ;; --- blocking socket coverage ------------------------------------------------
 ;; A bespoke, minimal suite rather than reusing jolt.net.socket-test/run!
@@ -82,8 +156,11 @@
             (c/check (str label ": server's peer == client's local address")
                      [(:jolt.net/host c-local) (:jolt.net/port c-local)]
                      [(:jolt.net/host s-peer) (:jolt.net/port s-peer)])
-            (c/check (str label ": client's peer == the listening port")
-                     port (:jolt.net/port c-peer))
+            (c/check (str label ": server's local == client's peer address")
+                     [(:jolt.net/host c-peer) (:jolt.net/port c-peer)]
+                     [(:jolt.net/host s-local) (:jolt.net/port s-local)])
+            (c/check (str label ": accepted socket is on the listening port")
+                     port (:jolt.net/port s-local))
             (c/check (str label ": both sides agree on family")
                      (:jolt.net/family c-peer) (:jolt.net/family s-peer)))
           (finally (net/close! server) (net/close! client))))
@@ -176,7 +253,7 @@
       (reset! captured l))
     (c/check "with-open closes the handle via its :close fn" true (net/closed? @captured))))
 
-(defn -main [& _]
+(defn- run-suite! []
   (println "jolt-net blocking-only suite (dependency-free)")
   (println (str "target: " (jolt.host/target)))
   (println (str "errno-source: " (jolt.ffi/errno-source)))
@@ -197,6 +274,7 @@
   ;; Must run before target/address/resolver/socket tests: those namespaces
   ;; call resolve/listen/connect, which would otherwise consume the "first
   ;; use" this stress test needs to observe.
+  (injected-init-controls!)
   (winsock-init-stress!)
 
   (target-test/run!)
@@ -206,7 +284,20 @@
   ;; and every resolver-test call re-enters ensure-subsystem! (a fast memoized
   ;; read) before getaddrinfo, per jolt.net.resolver/resolve.
   (resolver-test/run!)
-  (blocking-socket-suite!)
+  (blocking-socket-suite!))
 
-  (flush)
-  (System/exit (c/summary)))
+(defn -main [& _]
+  ;; Bound the suite inside Jolt so a blocking accept/connect regression still
+  ;; produces a diagnostic exit. The PowerShell runner has a longer outer
+  ;; watchdog for hangs before this main is reached.
+  (let [result (deref (future (run-suite!)) suite-timeout-ms timeout-token)]
+    (if (= timeout-token result)
+      (do
+        (println)
+        (println (str "FAIL  blocking-only suite timed out after "
+                      suite-timeout-ms " ms"))
+        (flush)
+        (System/exit 124))
+      (do
+        (flush)
+        (System/exit (c/summary))))))
