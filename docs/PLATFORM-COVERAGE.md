@@ -38,8 +38,11 @@ Do not summarize this file as "supports Linux, macOS and Windows."
   original `10093` (`WSANOTINITIALISED`) witness — `getaddrinfo` resolving
   before `ensure-subsystem!` ran — is gone because `jolt.net.resolver/resolve`
   now calls `ensure-subsystem!` directly, not only through `socket-for`. A
-  32-future stress test proved exactly one `WSAStartup` attempt and consistent
-  memoized success across all of them; see
+  latch-gated 32-future stress test proved exactly one `WSAStartup` attempt and
+  consistent memoized success across all of them. Fresh-state controls also
+  prove that both a returned initialization error and a thrown allocation/FFI
+  exception become one terminal memoized failure rather than an unresolved
+  promise; see
   `docs/proofs/socket-invariants.md` §0 and
   `docs/proofs/models/winsock-init-once-*.smt2`.
 - **Refused-connect native code (`WSAECONNREFUSED` / 10061) is NOT proven**,

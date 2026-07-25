@@ -50,32 +50,44 @@ three states in a single atom: untried (`nil`), one attempt in flight (a
 memoized). Exactly one caller wins the `nil -> promise` `compare-and-set!` and
 performs the single `WSAStartup` call; every other caller blocks on
 `(deref promise)` or reads the already-resolved outcome, so it never attempts
-its own call and always returns exactly what the winner delivered. `WSAStartup`
-is process-scoped and individual sockets never call `WSACleanup`, so tearing
-down the subsystem under other users is not possible from this code.
+its own call and always returns exactly what the winner delivered. The attempt
+boundary normalizes both a returned WSA error and a managed allocation/FFI
+exception into one `{:error ex}` outcome, publishes that terminal state, and
+delivers the promise before the winner itself returns or throws. An exceptional
+first attempt therefore cannot leave the atom holding an unresolved promise.
+`WSAStartup` is process-scoped and individual sockets never call `WSACleanup`,
+so tearing down the subsystem under other users is not possible from this code.
 
 **Result.**
 
-- `winsock-init-once-buggy.smt2` -- **sat**. Counterexample: both callers
-  observe "untried", `attempt_count = 2`, and their own outcomes disagree.
-- `winsock-init-once-corrected.smt2` -- **unsat**, with core `{cas_atomicity,
-  someone_attempts, t1_reads_winner, t2_reads_winner, property_violated}`. The
-  core shows agreement follows structurally from the loser deferring to the
-  winner's delivered value, not from assuming the two `WSAStartup` calls would
-  have agreed.
-- `winsock-init-once-nonvacuity.smt2` -- **sat**. Witness has one real CAS
-  winner under genuine contention, `attempt_count = 1`, and both callers'
-  outcomes equal.
+- `winsock-init-once-buggy.smt2` -- **sat**. Its known-bad check-then-reset
+  control admits both distinct entrants (`attempt_count = 2`), while an
+  exceptional attempt produces no canonical outcome, delivery, terminal state,
+  or completed caller.
+- `winsock-init-once-corrected.smt2` -- **unsat** for all three bounded attempt
+  kinds (success, returned error, thrown exception). The core includes the CAS
+  winner constraints plus explicit outcome-production, delivery,
+  terminalization, completion, and both-observer definitions.
+- `winsock-init-once-nonvacuity.smt2` -- **sat**. Two distinct callers reach
+  the gate, one wins, and even the thrown-exception case reaches a terminal
+  memoized error observed by both. Contention is derived from the two entrant
+  facts rather than asserted as a free Boolean.
 
 The runtime counterpart is `test/jolt/net/blocking_test_main.clj`'s
-`winsock-init-stress!`: it runs 32 concurrent futures through
-`ensure-subsystem!` as the process's actual first use -- deliberately before
-any other namespace's `resolve`/`listen`/`connect` call -- and asserts
-`jolt.net.ffi/winsock-startup-attempts` is exactly 1 afterward, then confirms a
-later caller reuses the memoized outcome without incrementing that counter.
-The 10093 witness disappearing is proved by the resolver and socket suites
-that run immediately afterward in the same process succeeding at all, not by
-a test that bypasses resolution.
+`winsock-init-stress!`: 32 futures first count down a shared latch and block on
+one start promise; only after every distinct entrant has reached that barrier
+are they released through `ensure-subsystem!` as the process's actual first
+Winsock use. The test asserts `jolt.net.ffi/winsock-startup-attempts` is exactly
+1 afterward, then confirms a later caller reuses the memoized outcome without
+incrementing that counter. Fresh-state deterministic controls inject both a
+returned error and a thrown exception, require exactly one attempt, require a
+timed later call not to strand, and compare the identical memoized exception.
+The complete blocking suite has a 60-second in-process watchdog and the native
+PowerShell runner has a 90-second outer process watchdog.
+
+The 10093 witness disappearing is proved by the resolver and socket suites that
+run immediately afterward in the same process succeeding at all, not by a test
+that bypasses resolution.
 
 ---
 

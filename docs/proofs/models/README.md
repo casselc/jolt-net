@@ -59,9 +59,9 @@ Three more files were added on 2026-07-24 for task W1
 | `connect-ownership-completion-buggy.smt2` | `sat` | `in_progress` returned with zero owners; native close step 2 precedes `getsockopt` step 3; completion takes close ownership |
 | `connect-ownership-completion-corrected.smt2` | `unsat` | returned ownership, rollback, completion preservation, and lease-drain facts exclude all four violation branches |
 | `connect-ownership-completion-nonvacuity.smt2` | `sat` | in-progress/refusal close race orders events `0/1/2/3/4` and retains one owner |
-| `winsock-init-once-buggy.smt2` | `sat` | both callers observe untried; `attempt_count = 2`; outcomes disagree |
-| `winsock-init-once-corrected.smt2` | `unsat` | `cas_atomicity`, `someone_attempts`, `t1_reads_winner`, `t2_reads_winner`, `property_violated` |
-| `winsock-init-once-nonvacuity.smt2` | `sat` | one CAS winner, `attempt_count = 1`, both callers' outcomes agree |
+| `winsock-init-once-buggy.smt2` | `sat` | two distinct gate entrants both win; `attempt_count = 2`; thrown attempt leaves outcome/delivery/terminal/completion false |
+| `winsock-init-once-corrected.smt2` | `unsat` | one CAS winner plus explicit outcome, delivery, terminal, completion, and observer definitions exclude the shared violation |
+| `winsock-init-once-nonvacuity.smt2` | `sat` | two distinct entrants, one winner, thrown exception normalized to one delivered terminal error observed by both |
 
 The full unsat cores observed in that run were:
 
@@ -129,8 +129,11 @@ connect ownership/completion corrected:
   completion_owner_violation_definition violation_definition violation_query
 
 winsock init once corrected:
-  cas_atomicity someone_attempts t1_reads_winner t2_reads_winner
-  property_violated
+  cas_at_most_one cas_has_a_winner attempt_count_definition
+  canonical_outcome_definition outcome_production_definition
+  delivery_definition terminal_definition completion_definition
+  t1_observation_definition t2_observation_definition
+  violation_definition violation_query
 ```
 
 ## Source and runtime oracles
@@ -171,18 +174,19 @@ interleaving tests supply the semantic oracle:
   absolute-deadline composition, lease drain, stale token filtering, forced
   write-vs-close retirement, and the enter/drain/reset wake race against the
   real implementation.
-- `jolt.net.ffi/ensure-subsystem!` implements the nil->promise CAS gate and the
-  loser-reads-winner-outcome agreement used by the winsock-init-once models;
-  `jolt.net.resolver/resolve` calls it before `getaddrinfo`, which is the
-  source oracle for the ordering half of the same task (see task W1 in
-  `docs/WINDOWS-RUNTIME-SEQUENCE.md`). `test/jolt/net/blocking_test_main.clj`'s
-  `winsock-init-stress!` is the runtime oracle: it runs 32 concurrent futures
-  through `ensure-subsystem!` as the process's genuine first use and asserts
-  `winsock-startup-attempts` is exactly 1.
+- `jolt.net.ffi/ensure-once!` implements the nil-to-promise CAS gate, catches a
+  thrown attempt into the canonical error outcome, publishes terminal state,
+  delivers the promise, and only then resolves the winner's public call.
+  `ensure-subsystem!` supplies the process-global Winsock state and native
+  attempt. `jolt.net.resolver/resolve` calls it before `getaddrinfo`, which is
+  the source oracle for the ordering half of task W1. The runtime oracle first
+  exercises fresh-state returned-error and thrown-exception controls, then puts
+  32 distinct first-use futures behind a latch/start barrier and asserts exactly
+  one real `WSAStartup` attempt.
 
 The models omit scheduler fairness, native ABI implementation, weak-memory
-behavior beneath Clojure atom linearizability, kernel bugs, numeric descriptor
-allocation policy, and the
-unbounded number of producers or registrations. The implementation therefore
-still needs the runtime race tests and platform CI; these models do not replace
-them.
+behavior beneath Clojure atom linearizability, failure of the atom/promise
+primitives themselves, thread death/cancellation, kernel bugs, numeric
+descriptor allocation policy, and the unbounded number of producers or
+registrations. The implementation therefore still needs the runtime race tests
+and platform CI; these models do not replace them.
