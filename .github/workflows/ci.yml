@@ -12,15 +12,21 @@
 #           means checking out an exact casselc/jolt revision and building a
 #           matching Chez Scheme.
 #
-# Windows x86_64 has native W1/W2/W3 gates: blocking sockets, FIONBIO, byte I/O,
-# connect completion, and real WSAPoll readiness. All three deliberately exclude
-# the alias-scoped Hegel dependency so a result cannot be confused with a
-# dependency-resolution result. What Windows still lacks is a wake transport
-# (task W4), so the PUBLIC poller there remains fail-closed and the W3 gate
-# drives an internal wake-less adapter over the same token machinery. The ARM64
-# preview compiles and runs the ABI probe with native MSVC; until that evidence
-# becomes a committed descriptor, source Jolt must identify the host and
-# jolt-net must fail closed. docs/PLATFORM-COVERAGE.md says the same.
+# Windows x86_64 has four native socket-runtime gates: W1 blocking sockets, W2
+# FIONBIO/byte I/O/connect completion, W3 real WSAPoll readiness, and W4 the
+# PUBLIC jolt.net/open-poller over an owner-independent wake transport plus
+# readiness-driven blocking accept. All four deliberately exclude the
+# alias-scoped Hegel dependency, so a socket-runtime result can never be
+# confused with a dependency-resolution result and no property-test artifact
+# download can erase runtime coverage.
+#
+# ABI probing is NOT socket evidence and is kept in separate jobs. A table
+# check, a cross-build, a namespace load, or a source-mode selection check says
+# nothing about whether a socket was opened. The ARM64 preview compiles and runs
+# the ABI probe with native MSVC and opens no socket; until that artifact is
+# reviewed into a committed descriptor and these same suites genuinely run
+# there, source Jolt must identify the host and jolt-net must fail closed.
+# ARM64 is therefore not promoted here. docs/PLATFORM-COVERAGE.md says the same.
 
 name: ci
 
@@ -372,10 +378,17 @@ jobs:
   # and the W3 suite drives the internal wake-less adapter. Run all three
   # dependency-free native suites through direct PowerShell/Chez: no
   # /dev/stdin, bash wrapper, or Hegel dependency.
+  # The Windows x86-64 W1/W2/W3/W4 runtime gate. This is the hosted promotion of
+  # the native PowerShell runners: source-built official Chez 10.4.1 under MSYS2
+  # MINGW64, the exact pinned proposal Jolt fork, and direct native
+  # PowerShell/Chez invocation with the AOT cache disabled and no jolt-hegel or
+  # artifact download in the socket path. Every gate must observe a real child
+  # process exit code; a step that cannot see one fails rather than reporting
+  # green.
   windows-portable:
-    name: Winsock W1/W2/W3 runtime (Windows x86_64; no wake transport)
+    name: Winsock W1/W2/W3/W4 runtime gate (Windows x86-64)
     runs-on: windows-2022
-    timeout-minutes: 35
+    timeout-minutes: 45
     defaults:
       run:
         shell: msys2 {0}
@@ -446,6 +459,9 @@ jobs:
             -RuntimePath "$env:GITHUB_WORKSPACE\jolt-upstream" `
             -ChezExe "$env:GITHUB_WORKSPACE\chez-install\bin\scheme.exe" `
             -TimeoutSeconds 90
+          if (-not (Test-Path variable:LASTEXITCODE) -or $null -eq $LASTEXITCODE) {
+            throw "W1 blocking socket gate: no child exit code was observed; refusing to report success"
+          }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run dependency-free native non-blocking socket suite
@@ -456,13 +472,19 @@ jobs:
             -RuntimePath "$env:GITHUB_WORKSPACE\jolt-upstream" `
             -ChezExe "$env:GITHUB_WORKSPACE\chez-install\bin\scheme.exe" `
             -TimeoutSeconds 90
+          if (-not (Test-Path variable:LASTEXITCODE) -or $null -eq $LASTEXITCODE) {
+            throw "W2 non-blocking socket gate: no child exit code was observed; refusing to report success"
+          }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # Task W3. Real WSAPoll over real Winsock handles, including the shared
       # registration/token machinery driven through the internal wake-less
-      # adapter. The timeout is larger than the W1/W2 gates because a refused
-      # loopback connect takes roughly 2.5 s to become error-ready and the suite
-      # waits on several such real events rather than sleeping past them.
+      # readiness adapter. That adapter is retained deliberately: it is evidence
+      # about a poller built WITHOUT a wake transport, and is explicitly not
+      # evidence for the W4 one. The timeout is larger than the W1/W2 gates
+      # because a refused loopback connect takes roughly 2.5 s to become
+      # error-ready and the suite waits on several such real events rather than
+      # sleeping past them.
       - name: Run dependency-free native WSAPoll readiness suite
         shell: powershell
         run: |
@@ -471,6 +493,30 @@ jobs:
             -RuntimePath "$env:GITHUB_WORKSPACE\jolt-upstream" `
             -ChezExe "$env:GITHUB_WORKSPACE\chez-install\bin\scheme.exe" `
             -TimeoutSeconds 240
+          if (-not (Test-Path variable:LASTEXITCODE) -or $null -eq $LASTEXITCODE) {
+            throw "W3 WSAPoll readiness gate: no child exit code was observed; refusing to report success"
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Task W4. The PUBLIC jolt.net/open-poller on Windows over the
+      # owner-independent wake transport (a connected IPv4 loopback datagram
+      # pair, because WSAPoll accepts only SOCKETs), plus readiness-driven
+      # blocking accept and listener close as a bounded completion boundary.
+      # 300 s is this gate's documented outer timeout: it waits on real refused
+      # connects and forced close/wake/drain interleavings instead of using
+      # elapsed sleep as an oracle, and it runs repeated open/close stress to
+      # expose owned-socket and wake-handle leaks.
+      - name: Run dependency-free native public poller and wake suite
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\test-windows-poller-wake.ps1" `
+            -JoltNetPath "$env:GITHUB_WORKSPACE" `
+            -RuntimePath "$env:GITHUB_WORKSPACE\jolt-upstream" `
+            -ChezExe "$env:GITHUB_WORKSPACE\chez-install\bin\scheme.exe" `
+            -TimeoutSeconds 300
+          if (-not (Test-Path variable:LASTEXITCODE) -or $null -eq $LASTEXITCODE) {
+            throw "W4 public poller and wake gate: no child exit code was observed; refusing to report success"
+          }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   # Public-preview evidence lane. The runner image also contains an x86_64
