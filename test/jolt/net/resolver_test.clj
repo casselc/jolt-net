@@ -2,6 +2,8 @@
   (:require [jolt.net.check :as c]
             [jolt.net :as net]
             [jolt.net.address :as addr]
+            [jolt.net.error :as err]
+            [jolt.net.ffi :as nffi]
             [jolt.ffi :as ffi]))
 
 (defn run! []
@@ -57,6 +59,28 @@
                 integer?
                 (try (net/resolve (net/endpoint "no-such-host.invalid" 80))
                      (catch :default e (:jolt.net/code (ex-data e)))))
+
+  ;; POSIX EAI_SYSTEM is a direct getaddrinfo return whose detail is delegated
+  ;; to errno. The pair must cross the collect-safe boundary atomically; a later
+  ;; error accessor is already too late. Winsock has no EAI_SYSTEM.
+  (when-let [system-code (get-in (net/target-descriptor) [:gai :system])]
+    (let [expected-native-code 424242
+          separate-capture? (atom false)
+          data
+          (with-redefs
+            [nffi/invoke-captured
+             (fn [_op & _args] [system-code expected-native-code])
+             err/capture
+             (fn []
+               (reset! separate-capture? true)
+               999999)]
+            (try
+              (net/resolve (net/endpoint "127.0.0.1" 80))
+              (catch :default e (ex-data e))))]
+      (c/check "EAI_SYSTEM preserves the native code from the captured pair"
+               expected-native-code (:jolt.net/system-code data))
+      (c/check "EAI_SYSTEM performs no separate post-call errno read"
+               false @separate-capture?)))
 
   (c/section "resolver: v1 hostname policy")
   ;; Rejected at construction, before any native call -- never handed to

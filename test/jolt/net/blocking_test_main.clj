@@ -16,6 +16,7 @@
   which is exactly the steady-state path production code takes."
   (:require [jolt.net.check :as c]
             [jolt.net.ffi :as nffi]
+            [jolt.net.error :as err]
             [jolt.net :as net]
             [jolt.net.target-test :as target-test]
             [jolt.net.address-test :as address-test]
@@ -78,6 +79,24 @@
                     #(and (map? %)
                           (identical? expected (:error %)))
                     @state))))
+
+(defn- atomic-error-controls!
+  []
+  (c/section "native error: fixed captured-pair contract")
+  (c/check "scalar dispatch does not expose blocking connect"
+           false (contains? nffi/call :connect))
+  (c/check "captured dispatch owns blocking connect"
+           true (contains? nffi/captured-call :connect))
+  (c/check "a success ignores stale native-error state"
+           7 (err/checked-captured :test neg? [7 999999]))
+  (let [expected (get-in (net/target-descriptor) [:errno :econnrefused])
+        data (try
+               (err/checked-captured :connect neg? [-1 expected])
+               (catch :default e (ex-data e)))]
+    (c/check "a failure is classified from the paired code"
+             :connection-refused (:jolt.net/kind data))
+    (c/check "a failure preserves the exact paired code"
+             expected (:jolt.net/code data))))
 
 (defn- winsock-init-stress!
   "Concurrent first callers must perform exactly one WSAStartup and all must
@@ -177,47 +196,16 @@
 
   (c/section "sockets: structured errors")
   ;; port 1 on loopback: nothing listens there and it is refused immediately.
-  ;;
-  ;; A direct probe on this runtime revision (raw socket()/connect() below the
-  ;; jolt.net API, no jolt-net code involved at all) showed connect() genuinely
-  ;; returning -1, but three immediate, consecutive WSAGetLastError() reads
-  ;; afterward all returning 0 -- while the non-:blocking bind/listen calls
-  ;; below correctly preserve their real WSAEADDRINUSE code. This isolates the
-  ;; clobber to the :blocking (collect-safe) Winsock FFI calling convention in
-  ;; this proposal-runtime revision (9dc88108), not to jolt.net's capture
-  ;; ordering or this task's Winsock-init fix. It is an upstream runtime
-  ;; defect outside jolt-net task W1's scope to patch (a separate, pinned,
-  ;; detached checkout), so it is recorded here as an honest, diagnosed SKIP
-  ;; rather than silently weakened or hidden.
   (let [expected-code (:econnrefused (:errno (net/target-descriptor)))
         outcome (try (net/connect (net/endpoint "127.0.0.1" 1))
                      :unexpected-success
                      (catch :default e (ex-data e)))]
-    (cond
-      (= :unexpected-success outcome)
-      (c/check "connect to a closed port throws" true false)
-
-      (and (= :connection-refused (:jolt.net/kind outcome))
-           (= expected-code (:jolt.net/code outcome)))
-      (do
-        (c/check "connect to a closed port is :connection-refused"
-                 :connection-refused (:jolt.net/kind outcome))
-        (c/check "the refusal carries the real native code"
-                 expected-code (:jolt.net/code outcome)))
-
-      (windows?)
-      (c/skip "refused-connect native code (WSAECONNREFUSED / 10061)"
-              (str "this runtime revision's :blocking Winsock FFI calling convention "
-                   "clobbers WSAGetLastError() before jolt.net can capture it -- observed "
-                   "code " (:jolt.net/code outcome) " instead of " expected-code
-                   ". Confirmed via a raw socket()/connect() probe outside jolt.net; "
-                   "duplicate-bind below (a non-:blocking call) correctly preserves its "
-                   "real code. Upstream runtime FFI defect, not a jolt-net bug; out of "
-                   "scope for task W1."))
-
-      :else
-      (c/check "the refusal carries the real native code"
-               expected-code (:jolt.net/code outcome))))
+    (c/check-pred "connect to a closed port throws structured data"
+                  map? outcome)
+    (c/check "connect to a closed port is :connection-refused"
+             :connection-refused (:jolt.net/kind outcome))
+    (c/check "the refusal carries the real native code"
+             expected-code (:jolt.net/code outcome)))
 
   ;; binding a port that is already bound, WITHOUT reuse
   (let [l (net/listen (net/endpoint "127.0.0.1" 0))
@@ -275,6 +263,7 @@
   ;; call resolve/listen/connect, which would otherwise consume the "first
   ;; use" this stress test needs to observe.
   (injected-init-controls!)
+  (atomic-error-controls!)
   (winsock-init-stress!)
 
   (target-test/run!)
