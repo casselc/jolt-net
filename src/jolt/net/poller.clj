@@ -210,15 +210,14 @@
   nil)
 
 (defn- wake-call
-  "Invoke one non-blocking wake-pipe syscall and capture errno immediately.
+  "Invoke one non-blocking wake-pipe syscall with its captured errno.
   The keyed hook is a deterministic test seam with the same result-map shape."
   [poller hook-key op raw buf len]
   (if-let [hook (get poller hook-key)]
     (hook raw buf len)
-    (let [result (nffi/invoke op raw buf len)]
+    (let [[result code] (nffi/invoke-captured op raw buf len)]
       (if (neg? result)
-        (let [code (err/capture)]
-          {:result result :code code})
+        {:result result :code code}
         {:result result}))))
 
 (defn- ensure-wake-byte! [poller]
@@ -329,7 +328,8 @@
   (require-posix! :open-poller)
   (let [fds (ffi/alloc 8)]
     (try
-      (err/checked :pipe neg? #(nffi/invoke :pipe fds))
+      (err/checked-captured
+        :pipe neg? (nffi/invoke-captured :pipe fds))
       (let [read-raw (ffi/read fds :int 0)
             write-raw (ffi/read fds :int 4)]
         (try

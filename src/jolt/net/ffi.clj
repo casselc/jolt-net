@@ -25,55 +25,82 @@
 
 ;; --- POSIX ------------------------------------------------------------------
 ;; socklen_t is unsigned int on both Linux and macOS.
-(ffi/defcfn p-socket      "socket"      [:int :int :int] :int)
-(ffi/defcfn p-bind        "bind"        [:int :pointer :uint] :int)
-(ffi/defcfn p-listen      "listen"      [:int :int] :int)
+(ffi/defcfn p-socket-with-error "socket" [:int :int :int] :int
+  {:capture-native-error true})
+(ffi/defcfn p-bind-with-error "bind" [:int :pointer :uint] :int
+  {:capture-native-error true})
+(ffi/defcfn p-listen-with-error "listen" [:int :int] :int
+  {:capture-native-error true})
 (ffi/defcfn p-accept-with-error "accept" [:int :pointer :pointer] :int
   {:blocking true :capture-native-error true})
-(ffi/defcfn p-try-accept  "accept"      [:int :pointer :pointer] :int)
+(ffi/defcfn p-try-accept-with-error "accept" [:int :pointer :pointer] :int
+  {:capture-native-error true})
 (ffi/defcfn p-connect-with-error "connect" [:int :pointer :uint] :int
   {:blocking true :capture-native-error true})
-(ffi/defcfn p-try-connect "connect"     [:int :pointer :uint] :int)
+(ffi/defcfn p-try-connect-with-error "connect" [:int :pointer :uint] :int
+  {:capture-native-error true})
 (ffi/defcfn p-close       "close"       [:int] :int)
-(ffi/defcfn p-shutdown    "shutdown"    [:int :int] :int)
-(ffi/defcfn p-getsockname "getsockname" [:int :pointer :pointer] :int)
-(ffi/defcfn p-getpeername "getpeername" [:int :pointer :pointer] :int)
-(ffi/defcfn p-setsockopt  "setsockopt"  [:int :int :int :pointer :uint] :int)
-(ffi/defcfn p-getsockopt  "getsockopt"  [:int :int :int :pointer :pointer] :int)
+(ffi/defcfn p-shutdown-with-error "shutdown" [:int :int] :int
+  {:capture-native-error true})
+(ffi/defcfn p-getsockname-with-error "getsockname" [:int :pointer :pointer] :int
+  {:capture-native-error true})
+(ffi/defcfn p-getpeername-with-error "getpeername" [:int :pointer :pointer] :int
+  {:capture-native-error true})
+(ffi/defcfn p-setsockopt-with-error "setsockopt"
+  [:int :int :int :pointer :uint] :int
+  {:capture-native-error true})
+(ffi/defcfn p-getsockopt-with-error "getsockopt"
+  [:int :int :int :pointer :pointer] :int
+  {:capture-native-error true})
 (ffi/defcfn p-recv-with-error "recv" [:int :pointer :size_t :int] :ssize_t
   {:blocking true :capture-native-error true})
 (ffi/defcfn p-send-with-error "send" [:int :pointer :size_t :int] :ssize_t
   {:blocking true :capture-native-error true})
-(ffi/defcfn p-try-recv    "recv"        [:int :pointer :size_t :int] :ssize_t)
-(ffi/defcfn p-try-send    "send"        [:int :pointer :size_t :int] :ssize_t)
+(ffi/defcfn p-try-recv-with-error "recv" [:int :pointer :size_t :int] :ssize_t
+  {:capture-native-error true})
+(ffi/defcfn p-try-send-with-error "send" [:int :pointer :size_t :int] :ssize_t
+  {:capture-native-error true})
 ;; POSIX readiness support. fcntl is variadic in C. Its third argument remains
 ;; typed :int for this bounded F_GETFL/F_SETFL surface, but the ABI must still
 ;; name the two-fixed-argument boundary: Apple arm64 places `...` arguments on
 ;; the stack even when a fixed third argument would have occupied a register.
-(ffi/defcfn p-fcntl       "fcntl"       [:int :int :int] :int
-  {:varargs-after 2})
-(ffi/defcfn p-pipe        "pipe"        [:pointer] :int)
+(ffi/defcfn p-fcntl-with-error "fcntl" [:int :int :int] :int
+  {:varargs-after 2 :capture-native-error true})
+(ffi/defcfn p-pipe-with-error "pipe" [:pointer] :int
+  {:capture-native-error true})
 (ffi/defcfn p-poll-size-with-error "poll" [:pointer :size_t :int] :int
   {:blocking true :capture-native-error true})
 (ffi/defcfn p-poll-uint-with-error "poll" [:pointer :uint :int] :int
   {:blocking true :capture-native-error true})
-(ffi/defcfn p-read        "read"        [:int :pointer :size_t] :ssize_t)
-(ffi/defcfn p-write       "write"       [:int :pointer :size_t] :ssize_t)
+(ffi/defcfn p-read-with-error "read" [:int :pointer :size_t] :ssize_t
+  {:capture-native-error true})
+(ffi/defcfn p-write-with-error "write" [:int :pointer :size_t] :ssize_t
+  {:capture-native-error true})
 
 ;; --- Winsock ----------------------------------------------------------------
 ;; SOCKET is :uptr, and socklen is int rather than socklen_t.
-(ffi/defcfn w-socket      "socket"      [:int :int :int] :uptr)
-(ffi/defcfn w-bind        "bind"        [:uptr :pointer :int] :int)
-(ffi/defcfn w-listen      "listen"      [:uptr :int] :int)
+(ffi/defcfn w-socket-with-error "socket" [:int :int :int] :uptr
+  {:capture-native-error true})
+(ffi/defcfn w-bind-with-error "bind" [:uptr :pointer :int] :int
+  {:capture-native-error true})
+(ffi/defcfn w-listen-with-error "listen" [:uptr :int] :int
+  {:capture-native-error true})
 (ffi/defcfn w-accept-with-error "accept" [:uptr :pointer :pointer] :uptr
   {:blocking true :capture-native-error true})
 (ffi/defcfn w-connect-with-error "connect" [:uptr :pointer :int] :int
   {:blocking true :capture-native-error true})
 (ffi/defcfn w-close       "closesocket" [:uptr] :int)
-(ffi/defcfn w-shutdown    "shutdown"    [:uptr :int] :int)
-(ffi/defcfn w-getsockname "getsockname" [:uptr :pointer :pointer] :int)
-(ffi/defcfn w-getpeername "getpeername" [:uptr :pointer :pointer] :int)
-(ffi/defcfn w-setsockopt  "setsockopt"  [:uptr :int :int :pointer :int] :int)
+(ffi/defcfn w-shutdown-with-error "shutdown" [:uptr :int] :int
+  {:capture-native-error true})
+(ffi/defcfn w-getsockname-with-error "getsockname"
+  [:uptr :pointer :pointer] :int
+  {:capture-native-error true})
+(ffi/defcfn w-getpeername-with-error "getpeername"
+  [:uptr :pointer :pointer] :int
+  {:capture-native-error true})
+(ffi/defcfn w-setsockopt-with-error "setsockopt"
+  [:uptr :int :int :pointer :int] :int
+  {:capture-native-error true})
 (ffi/defcfn w-recv-with-error "recv" [:uptr :pointer :int :int] :int
   {:blocking true :capture-native-error true})
 (ffi/defcfn w-send-with-error "send" [:uptr :pointer :int :int] :int
@@ -111,31 +138,44 @@
 
 (def call
   (if windows?
-    {:socket w-socket :bind w-bind :listen w-listen
-     :close w-close :shutdown w-shutdown
-     :getsockname w-getsockname :getpeername w-getpeername
-     :setsockopt w-setsockopt}
-    {:socket p-socket :bind p-bind :listen p-listen
-     :try-accept p-try-accept
-     :try-connect p-try-connect
-     :close p-close :shutdown p-shutdown
-     :getsockname p-getsockname :getpeername p-getpeername
-     :setsockopt p-setsockopt :getsockopt p-getsockopt
-     :try-recv p-try-recv :try-send p-try-send
-     :fcntl p-fcntl :pipe p-pipe :read p-read :write p-write}))
+    {:close w-close}
+    {:close p-close}))
 
 (def captured-call
   (if windows?
-    {:accept w-accept-with-error
+    {:socket w-socket-with-error
+     :bind w-bind-with-error
+     :listen w-listen-with-error
+     :accept w-accept-with-error
      :connect w-connect-with-error
+     :shutdown w-shutdown-with-error
+     :getsockname w-getsockname-with-error
+     :getpeername w-getpeername-with-error
+     :setsockopt w-setsockopt-with-error
      :recv w-recv-with-error
      :send w-send-with-error
      :getaddrinfo c-getaddrinfo-with-error}
-    {:accept p-accept-with-error
+    {:socket p-socket-with-error
+     :bind p-bind-with-error
+     :listen p-listen-with-error
+     :accept p-accept-with-error
+     :try-accept p-try-accept-with-error
      :connect p-connect-with-error
+     :try-connect p-try-connect-with-error
+     :shutdown p-shutdown-with-error
+     :getsockname p-getsockname-with-error
+     :getpeername p-getpeername-with-error
+     :setsockopt p-setsockopt-with-error
+     :getsockopt p-getsockopt-with-error
      :recv p-recv-with-error
      :send p-send-with-error
+     :try-recv p-try-recv-with-error
+     :try-send p-try-send-with-error
+     :fcntl p-fcntl-with-error
+     :pipe p-pipe-with-error
      :poll p-poll-with-error
+     :read p-read-with-error
+     :write p-write-with-error
      :getaddrinfo c-getaddrinfo-with-error}))
 
 (defn invoke

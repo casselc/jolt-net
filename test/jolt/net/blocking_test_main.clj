@@ -83,10 +83,19 @@
 (defn- atomic-error-controls!
   []
   (c/section "native error: fixed captured-pair contract")
-  (c/check "scalar dispatch does not expose blocking connect"
-           false (contains? nffi/call :connect))
-  (c/check "captured dispatch owns blocking connect"
-           true (contains? nffi/captured-call :connect))
+  (c/check "scalar dispatch owns only error-independent close"
+           #{:close} (set (keys nffi/call)))
+  (c/check "scalar and captured dispatch are disjoint"
+           true
+           (empty?
+             (filter #(contains? nffi/captured-call %)
+                     (keys nffi/call))))
+  (c/check "captured dispatch owns representative sentinel-returning calls"
+           true
+           (every? #(contains? nffi/captured-call %)
+                   [:socket :bind :listen :accept :connect
+                    :shutdown :getsockname :getpeername
+                    :setsockopt :recv :send :getaddrinfo]))
   (c/check "a success ignores stale native-error state"
            7 (err/checked-captured :test neg? [7 999999]))
   (let [expected (get-in (net/target-descriptor) [:errno :econnrefused])

@@ -57,7 +57,10 @@
   (let [p (ffi/alloc 4)]
     (try
       (ffi/write p :int 0 v)
-      (err/checked :setsockopt neg? #(nffi/invoke :setsockopt raw level opt p 4) ctx)
+      (err/checked-captured
+        :setsockopt neg?
+        (nffi/invoke-captured :setsockopt raw level opt p 4)
+        ctx)
       (finally (ffi/free p)))))
 
 (defn- apply-options! [raw opts ctx]
@@ -94,13 +97,16 @@
 
 (defn- socket-for [resolved ctx]
   (nffi/ensure-subsystem!)
-  (err/checked :socket #(not (nffi/handle-valid? %))
-               #(nffi/invoke :socket
-                             (if (= :inet6 (:jolt.net/family resolved))
-                               (t/const d :af-inet6) (t/const d :af-inet))
-                             (t/const d :sock-stream)
-                             0)
-               ctx))
+  (err/checked-captured
+    :socket
+    #(not (nffi/handle-valid? %))
+    (nffi/invoke-captured
+      :socket
+      (if (= :inet6 (:jolt.net/family resolved))
+        (t/const d :af-inet6) (t/const d :af-inet))
+      (t/const d :sock-stream)
+      0)
+    ctx))
 
 (def ^:private posix-nonblocking-targets #{:linux :darwin})
 (def ^:private poller-targets #{:linux :darwin})
@@ -138,7 +144,8 @@
         lenp (ffi/alloc 4)]
     (try
       (ffi/write lenp :int 0 sz)
-      (err/checked op neg? #(nffi/invoke op raw sa lenp) nil)
+      (err/checked-captured
+        op neg? (nffi/invoke-captured op raw sa lenp) nil)
       (addr/decode-sockaddr d sa)
       (finally (ffi/free sa) (ffi/free lenp)))))
 
@@ -174,9 +181,13 @@
        (try
          (apply-options! raw opts ctx)
          (with-sockaddr resolved
-           (fn [p len] (err/checked :bind neg? #(nffi/invoke :bind raw p len) ctx)))
-         (err/checked :listen neg?
-                      #(nffi/invoke :listen raw (or (:backlog opts) 128)) ctx)
+           (fn [p len]
+             (err/checked-captured
+               :bind neg? (nffi/invoke-captured :bind raw p len) ctx)))
+         (err/checked-captured
+           :listen neg?
+           (nffi/invoke-captured :listen raw (or (:backlog opts) 128))
+           ctx)
          (when (poller-runtime?)
            (nb/set-raw! raw ctx))
          ;; ownership transfers only on success
@@ -274,12 +285,12 @@
    (with-nonblocking-lease
      listener
      (fn [raw _]
-       (let [c (nffi/invoke :try-accept raw ffi/null ffi/null)]
+       (let [[c code]
+             (nffi/invoke-captured :try-accept raw ffi/null ffi/null)]
          (if-not (nffi/handle-valid? c)
-           (let [code (err/capture)]
-             (if (would-block-code? code)
-               would-block
-               (throw (err/native-ex :accept code nil))))
+           (if (would-block-code? code)
+             would-block
+             (throw (err/native-ex :accept code nil)))
            (try
              (apply-options! c opts nil)
              (nb/set-raw! c)
@@ -392,13 +403,9 @@
           (with-sockaddr
             resolved
             (fn [p len]
-              (let [rc (nffi/invoke :try-connect raw p len)]
-                (if (neg? rc)
-                  ;; Capture before with-sockaddr frees its scratch pointer and
-                  ;; before rollback closes the raw socket.
-                  (let [code (err/capture)]
-                    (connect-initiation-status rc code ctx))
-                  (connect-initiation-status rc nil ctx)))))
+              (let [[rc code]
+                    (nffi/invoke-captured :try-connect raw p len)]
+                (connect-initiation-status rc code ctx))))
           (catch :default e
             (h/raw-close! raw)
             (throw e)))]
@@ -500,13 +507,13 @@
               (try
                 (ffi/write errorp :int 0 0)
                 (ffi/write lenp :uint 0 4)
-                (err/checked
-                  :connect
-                  neg?
-                  #(nffi/invoke :getsockopt raw
-                                (t/const d :sol-socket)
-                                (t/const d :so-error)
-                                errorp lenp)
+                (err/checked-captured
+                  :connect neg?
+                  (nffi/invoke-captured
+                    :getsockopt raw
+                    (t/const d :sol-socket)
+                    (t/const d :so-error)
+                    errorp lenp)
                   ctx)
                 (let [code (ffi/read errorp :int 0)]
                   (cond
@@ -532,7 +539,8 @@
     (h/with-lease
       sock
       (fn [raw _]
-        (err/checked :shutdown neg? #(nffi/invoke :shutdown raw how) nil)))
+        (err/checked-captured
+          :shutdown neg? (nffi/invoke-captured :shutdown raw how) nil)))
     nil))
 
 ;; --- readiness-oriented byte I/O -------------------------------------------
@@ -560,14 +568,14 @@
         (ffi/with-byte-array-pointer
           dest off len
           (fn [ptr nbytes]
-            (let [n (nffi/invoke :try-recv raw ptr nbytes 0)]
+            (let [[n code]
+                  (nffi/invoke-captured :try-recv raw ptr nbytes 0)]
               (cond
                 (pos? n) n
                 (zero? n) eof
-                :else (let [code (err/capture)]
-                        (if (would-block-code? code)
-                          would-block
-                          (throw (err/native-ex :read code nil))))))))))))
+                :else (if (would-block-code? code)
+                        would-block
+                        (throw (err/native-ex :read code nil)))))))))))
 
 (defn try-write-bytes!
   "Write from src[off,off+len) without waiting.
@@ -586,9 +594,10 @@
         (ffi/with-byte-array-pointer
           src off len
           (fn [ptr nbytes]
-            (let [n (nffi/invoke :try-send
-                                 raw ptr nbytes
-                                 (or (t/const d :msg-nosignal) 0))]
+            (let [[n code]
+                  (nffi/invoke-captured
+                    :try-send raw ptr nbytes
+                    (or (t/const d :msg-nosignal) 0))]
               (cond
                 (pos? n) n
                 (zero? n)
@@ -596,10 +605,9 @@
                          :write
                          "send made no progress for a non-empty slice"
                          {:jolt.net/length len}))
-                :else (let [code (err/capture)]
-                        (if (would-block-code? code)
-                          would-block
-                          (throw (err/native-ex :write code nil))))))))))))
+                :else (if (would-block-code? code)
+                        would-block
+                        (throw (err/native-ex :write code nil)))))))))))
 
 (defn close!
   "Close a socket or poller. Idempotent: returns true if this call closed it."
