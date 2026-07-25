@@ -393,7 +393,9 @@ Branch from the clean reviewed W3 tip, not Claude's original W3 tip:
 `claude/windows-poller-wake`.
 
 Status: implemented locally on `claude/windows-poller-wake`, branched from the
-reviewed W3 tip `08b24ea`. Native Windows x86-64 passed the new W4 public-poller
+reviewed W3 tip `08b24ea`. Every gate below was run on revision `38ff1db`; the
+only commit after it is this prose record of the results, which touches no
+source, test, tool, or model file. Native Windows x86-64 passed the new W4 public-poller
 gate 73/73, the W3 gate 124/124, the W2 gate 56/56, and the W1 gate 162/162, all
 with no skips and an observed exit code of 0, against native Chez 10.4.1 and the
 pinned Jolt fork `85f645aa` (worktree `D:\src\jolt-proposal-net-runtime-w3`). A
