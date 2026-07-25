@@ -319,9 +319,10 @@ transition to `:closing` and wait with no wake mechanism. The review branch
 `codex/windows-wsapoll-review` moves the refusal onto the exact lifecycle value
 used by the CAS, adds a deterministic admitted-await gate, and records
 buggy/corrected/non-vacuity models. Chiasmus reports `sat`/`unsat`/`sat` with the
-corrected four-label core recorded in the model index. The original native
-116-check W3 result remains valid evidence for the WSAPoll implementation; the
-expanded Windows gate must be rerun on the review tip before W4 branches.
+corrected four-label core recorded in the model index. On reviewed revision
+`2bd40ff`, native Windows W1, W2, and the expanded W3 gate passed 162/162,
+56/56, and 124/124 respectively with observed exit code 0. The Linux full suite
+also passed 235/235 with Hegel required.
 
 The public Windows poller is deliberately still fail-closed. Without an
 owner-independent wake transport, explicit `wake!`, blocked-await cancellation,
