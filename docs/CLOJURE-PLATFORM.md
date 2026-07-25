@@ -201,6 +201,15 @@ No layer above TCP may infer EOF from a zero-length success, assume one write
 drains a buffer, reuse a submitted byte window before its terminal completion,
 or observe a native descriptor.
 
+Peer half-close is asynchronous across the connection. `shutdown(:write)`
+orders the sender's own writes before FIN, but it is not a barrier that makes
+FIN synchronously observable by the receiver. A non-blocking receive with no
+buffered payload may still report `would-block`; the adapter waits for
+read/hangup readiness and retries under the operation's existing absolute
+deadline. After buffered payload is exhausted and FIN is observable, the next
+positive-length receive reports the distinct EOF value. A zero-length request
+alone reports numeric zero and never stands in for EOF.
+
 Most of this layer is one pure constructor over the socket and clock handlers:
 
 ```clojure

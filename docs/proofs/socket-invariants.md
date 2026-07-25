@@ -426,6 +426,35 @@ data-flow property.
 
 ---
 
+## 5. Peer half-close becomes EOF through readiness, not synchronization
+
+**Bounded claim.** For a non-blocking receiver with no buffered payload, peer
+`shutdown(:write)` may be followed by `would-block`. Once FIN is
+readiness-visible and buffered payload is exhausted, the next positive-length
+receive returns the distinct EOF value. A zero-length receive alone returns
+numeric zero; it is never evidence of FIN.
+
+**Counterexample to the stronger claim.** Native macOS arm64 CI run
+`30144054281` executed the sender's shutdown and then immediately attempted the
+receiver's non-blocking read. Darwin returned `would-block`, disproving the
+earlier test assumption that peer shutdown was a cross-socket synchronization
+barrier. Linux commonly made the same test pass because FIN happened to be
+observable before the read, but that timing was not a portable contract.
+
+**Design and executable control.** `jolt.net.poller-test` now registers the
+receiver for read readiness before shutdown. If the first read is
+`would-block`, it awaits read/hangup readiness and retries under one absolute
+monotonic deadline; it accepts immediate EOF as the faster valid execution.
+The test separately requires a zero-length read to return zero and the eventual
+positive-length read to return `jolt.net/eof`.
+
+This is an environmental temporal premise, not a useful SMT state-space claim:
+an SMT model saying “FIN is visible after readiness” would merely assume the
+kernel contract it appeared to prove. The Darwin counterexample, synchronized
+native runtime test, and portable TCP contract are the appropriate evidence.
+
+---
+
 ## What is deliberately not modelled
 
 - **Resolver copy-before-free.** This is a memory-lifetime property, and the

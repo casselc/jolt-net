@@ -22,11 +22,11 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 | Platform | Constants / layouts | Blocking socket base | Non-blocking I/O + poller/connect | Notes |
 |---|---|---|---|---|
 | Linux x86-64 | **probed** | **runtime** | **runtime** | The development and CI platform. Real `fcntl`, `poll`, pipe-wake, sliced byte I/O, EOF, non-blocking connect/`SO_ERROR`, mutation wake, and close races are exercised. |
-| Linux aarch64 | **candidate** | **candidate** | **candidate** | Has its own `ubuntu-24.04-arm` ABI-probe and full-runtime jobs. The descriptor explicitly aliases the x86-64 socket facts (same kernel UAPI and LP64), and the arm64 job diffs every freshly probed fact against that alias before running real sockets. Keep this row at candidate until that native job is observed green. |
-| Windows x86-64 | **probed** | **candidate** | none | A portable hosted gate is configured to load native Chez/Jolt and exercise descriptor/address logic. Separately, `tools/test-windows-blocking.ps1` has made real local Winsock calls: initialization, IPv4/IPv6 loopback listen/connect/accept, port-zero, endpoint inspection, duplicate bind, and idempotent close. Keep this row at candidate until the socket suite is a hosted gate on the exact revision. |
-| Windows aarch64 | **configured** | none | none | A non-gating `windows-11-vs2026-arm` job is configured to build native `tarm64nt` Chez 10.4.1, compile and execute the probe with ARM64 MSVC, assert the probe and source Jolt both report `:aarch64`, and upload `windows-aarch64.edn`. No descriptor is committed from assumed x64 similarity: until a successful artifact is reviewed, target selection is required to fail closed. |
+| Linux aarch64 | **probed** | **runtime** | **runtime** | The `ubuntu-24.04-arm` job diffs every freshly probed fact against the explicit x86-64 alias before running real sockets. Probe, blocking/non-blocking runtime, poller races, and required Hegel properties passed on revision `f0affc4` in CI run `30144054281`. |
+| Windows x86-64 | **probed** | **candidate** | none | A native hosted W1 gate is configured to run the dependency-free blocking Winsock suite directly through PowerShell and Chez. The same suite has made real local calls for initialization, IPv4/IPv6 loopback listen/connect/accept, port-zero, endpoint inspection, exact refused-connect and duplicate-bind errors, and idempotent close. Keep this row at candidate until the corrected hosted gate is observed green on the exact revision. |
+| Windows aarch64 | **preview artifact** | none | none | CI run `30144054281` built native `tarm64nt` Chez 10.4.1 and executed the ABI probe with ARM64 MSVC. The uploaded facts match Windows x86-64 after normalizing only CRLF and the architecture label, but no descriptor is committed yet: the corrected source-mode lane must prove target selection and fail-closed behavior before that evidence is admitted. |
 | macOS arm64 | **probed** | **runtime** | **runtime** | The complete native suite passes with source-built Chez 10.4.1: variadic-ABI-correct `fcntl`, `poll(2)`, non-blocking connect/`SO_ERROR`, sliced byte I/O, SIGPIPE, close races, and the owner-independent self-pipe protocol, with Darwin's distinct 32-bit `nfds_t` binding. |
-| macOS x86-64 | **candidate** | **candidate** | **candidate** | Has its own `macos-15-intel` probe and full-runtime jobs. The live x86_64 probe is uploaded and reported as a new artifact, then explicitly normalized and diffed against the shared Darwin descriptor. Keep this row at candidate until both jobs are observed green. |
+| macOS x86-64 | **probed** | **runtime** | **runtime** | The live x86_64 probe is normalized only at the architecture label and diffed against the explicit shared-Darwin descriptor. Probe, full socket/poller runtime, source-built pinned libhegel, and required Hegel properties passed on revision `f0affc4` in CI run `30144054281`. |
 
 ## Specific residuals
 
@@ -77,11 +77,10 @@ Do not summarize this file as "supports Linux, macOS and Windows."
   suite passed on the macOS arm64 runner for commit `65a0f1e` in
   [CI run 30078697403](https://github.com/casselc/jolt-net/actions/runs/30078697403).
   There is no fallback to the old uninterruptible accept path.
-- **Intel macOS evidence.** `macos-15-intel` now has independent ABI-probe and
-  complete POSIX-runtime jobs. The probe remains a separately uploaded
-  `darwin-x86-64.edn` artifact and the tables job reports it as new until the
-  evidence is reviewed and committed; the runtime job additionally proves the
-  current shared-Darwin descriptor assumption by diffing all live facts.
+- **Intel macOS evidence.** `macos-15-intel` has independent ABI-probe and
+  complete POSIX-runtime jobs. Both passed in run `30144054281`; the runtime job
+  proves the explicit shared-Darwin descriptor by diffing all live facts and
+  builds the pinned libhegel source because no matching release asset exists.
 - **Readiness hot-path shape.** Listener, connected, and accepted descriptors
   enter nonblocking mode once. A scoped core FFI primitive pins and exposes the
   validated interior pointer for every byte-array slice, so partial recv/send

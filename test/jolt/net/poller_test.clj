@@ -299,9 +299,42 @@
                  3 (net/try-read-bytes! server dest 2 3))
         (c/check "read and write honor both array offsets"
                  [0 0 20 30 40 0] (vec dest))
-        (net/shutdown! client :write)
-        (c/check "shutdown-write is observed as the EOF value"
-                 net/eof (net/try-read-bytes! server dest 0 1)))
+        (let [p (net/open-poller)
+              deadline (+ (jolt.host/monotonic-nanos) 2000000000)
+              saw-ready? (atom false)]
+          (try
+            (net/register! p server #{:read})
+            (net/shutdown! client :write)
+            ;; Peer shutdown is not a cross-socket synchronization barrier.
+            ;; Darwin may still report would-block until FIN becomes readable.
+            ;; Once that happens, retry only after observed readiness and under
+            ;; the original absolute deadline.
+            (let [initial (net/try-read-bytes! server dest 0 1)
+                  result
+                  (if (= net/would-block initial)
+                    (loop []
+                      (let [ready (net/await-ready p (remaining-ms deadline))]
+                        (cond
+                          (seq ready)
+                          (do
+                            (reset! saw-ready? true)
+                            (let [r (net/try-read-bytes! server dest 0 1)]
+                              (if (and (= net/would-block r)
+                                       (< (jolt.host/monotonic-nanos) deadline))
+                                (recur)
+                                r)))
+
+                          (< (jolt.host/monotonic-nanos) deadline)
+                          (recur)
+
+                          :else net/would-block)))
+                    initial)]
+              (c/check "a would-block half-close path observes readiness before retry"
+                       true
+                       (or (not= net/would-block initial) @saw-ready?))
+              (c/check "shutdown-write is observed as the EOF value"
+                       net/eof result))
+            (finally (net/close! p)))))
       (finally (net/close! client) (net/close! server))))
 
   (c/section "short operation leases")
