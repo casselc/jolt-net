@@ -236,8 +236,10 @@ native Git for Windows, not PowerShell-to-bash indirection.
 
 Acceptance:
 
-- `ioctlsocket(FIONBIO)` is probed from Windows headers and its applied state is
-  verified before the handle is marked nonblocking;
+- `ioctlsocket(FIONBIO)` and the width of its `u_long` argument are probed from
+  Windows headers; production marks the handle only after a successful return,
+  and native behavior tests prove that accept/read then report would-block.
+  Do not invent a nonexistent portable getter for Windows nonblocking mode;
 - accept/read before readiness return `would-block`, zero-length read alone
   returns zero, and peer half-close returns EOF;
 - sliced send/receive preserve both array offsets and byte counts;
