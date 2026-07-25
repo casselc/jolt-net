@@ -11,11 +11,12 @@
             [jolt.net.ffi :as nffi]
             [jolt.net.handle :as h]
             [jolt.net.nonblocking :as nb]
+            [jolt.net.readiness :as r]
             [jolt.net.target :as t]))
 
 (def ^:private d nffi/descriptor)
 (def ^:private next-poller (atom 0))
-(def ^:private max-native-wait-ms 1000)
+(def ^:private max-native-wait-ms r/max-native-wait-ms)
 
 (declare submit! signal-wake!)
 
@@ -52,6 +53,26 @@
       (throw (invalid-token op token "registration token is stale")))
     registration))
 
+(defn current-token?
+  "Is a token captured in an earlier snapshot still the current token for its
+  registration?
+
+  This is the shared stale-event gate, and the ONLY thing standing between a
+  native readiness result and a caller. A token carries both the socket's
+  ownership generation and the registration's revision, and a snapshot is taken
+  BEFORE the native wait -- so by the time events come back, the registration
+  may have been updated (new revision), removed, or replaced by a different
+  socket that reused the same descriptor value (new generation). Equality
+  against the registration's live token rejects all three, because the token is
+  compared whole rather than by descriptor.
+
+  Both backends funnel through this. Neither the POSIX nor the Windows
+  readiness path may dispatch an event whose token this rejects."
+  [poller token]
+  (let [current (get @(:registrations poller)
+                     (:jolt.net/registration token))]
+    (and (some? current) (= token (:token current)))))
+
 (defn- remove-registration! [poller registration]
   (swap! (:registrations poller) dissoc
          (:jolt.net/registration (:token registration)))
@@ -72,15 +93,15 @@
                  :jolt.net/revision 0}
           listener
           (h/on-close!
-            socket
-            (fn []
+           socket
+           (fn []
               ;; Close owns the socket state before invoking this callback. The
               ;; mutation is therefore ordered before native descriptor close.
-              (try
-                (submit! poller {:op :remove-closed
-                                 :registration rid
-                                 :generation generation})
-                (catch :default _ nil))))]
+             (try
+               (submit! poller {:op :remove-closed
+                                :registration rid
+                                :generation generation})
+               (catch :default _ nil))))]
       (when-not listener
         (throw (err/invalid-ex :register "socket is already closed" nil)))
       (swap! (:registrations poller)
@@ -107,8 +128,8 @@
       (when-not (= :open (:phase @(:lifecycle poller)))
         (throw (err/invalid-ex :remove "poller is closed" nil)))
       (remove-registration!
-        poller
-        (current-registration poller (:token mutation) :remove)))
+       poller
+       (current-registration poller (:token mutation) :remove)))
 
     :remove-closed
     (let [registration (get @(:registrations poller)
@@ -206,7 +227,8 @@
         (recur)))
     ;; Closing write first cannot SIGPIPE an admitted writer: there are none.
     ;; Keep read open until await has released its read lease.
-    (h/close! (:wake-write poller)))
+    (when (wake-transport? poller)
+      (h/close! (:wake-write poller))))
   nil)
 
 (defn- wake-call
@@ -255,12 +277,34 @@
       (reset! (:wake-pending poller) false)))
   nil)
 
+(defn wake-transport?
+  "Does this poller have a wake transport beneath it?
+
+  False only for the internal Windows readiness adapter, where it is the single
+  fact every wake-dependent contract is gated on. Nothing degrades quietly when
+  it is false; the affected operations refuse."
+  [poller]
+  (some? (:wake-write poller)))
+
+(defn- require-wake-transport! [poller op]
+  (when-not (wake-transport? poller)
+    (throw (err/invalid-ex
+            op
+            "this readiness adapter has no wake transport"
+            {:jolt.net/requires :windows-wake-transport}))))
+
 (defn- signal-wake! [poller]
   ;; The sequence closes the drain/reset coalescing window: if a producer sees
   ;; :wake-pending while the consumer has already drained the byte, the consumer
   ;; observes this increment and restores a byte after clearing the gate.
   (swap! (:wake-sequence poller) inc)
-  (ensure-wake-byte! poller))
+  ;; No transport means no byte to write. The epoch still advances so the
+  ;; sequence stays meaningful, but a mutation cannot interrupt an ALREADY
+  ;; RUNNING native wait on that target -- which is exactly why the public
+  ;; Windows poller stays fail-closed and only the internal adapter, whose
+  ;; awaits are sequential, is allowed to run this path.
+  (when (wake-transport? poller)
+    (ensure-wake-byte! poller)))
 
 (defn- submit! [poller mutation]
   (let [ack (promise)
@@ -287,8 +331,9 @@
                                 (assoc old :phase :closed))
             (do
               ;; wake-write was retired and closed before finish-close! can run.
-              (h/close! (:wake-write poller))
-              (h/close! (:wake-read poller))
+              (when (wake-transport? poller)
+                (h/close! (:wake-write poller))
+                (h/close! (:wake-read poller)))
               true)
             (recur))
           :else false)))))
@@ -298,6 +343,18 @@
   await is woken. The winning close does not return until that await exits and
   both pipe descriptors are closed."
   [poller]
+  ;; Close is a COMPLETION boundary: it returns only after an active await has
+  ;; exited, and on POSIX the retired wake pipe's HUP is what forces that exit.
+  ;; Without a wake transport there is nothing to force it, so an adapter close
+  ;; refuses while an await is running rather than parking for the awaiting
+  ;; caller's whole timeout and calling that "completion". Terminal close
+  ;; against a blocked await is a W4 obligation.
+  (when (and (not (wake-transport? poller))
+             (:awaiting? @(:lifecycle poller)))
+    (throw (err/invalid-ex
+            :close
+            "this readiness adapter cannot terminate an active await without a wake transport"
+            {:jolt.net/requires :windows-wake-transport})))
   (let [lifecycle (:lifecycle poller)]
     (loop []
       (let [old @lifecycle]
@@ -322,6 +379,57 @@
           :closing false
           :closed false)))))
 
+(defn- poller-value
+  "Build the poller value shared by every backend.
+
+  There is exactly ONE registration and token state machine, and this is it.
+  The only thing a backend varies is whether a wake transport exists: pass the
+  two pipe handles, or nil for a target that has none yet. Everything else --
+  generation-bearing and revision-bearing tokens, the acknowledged mutation
+  queue, snapshot capture, stale-event rejection, lifecycle -- is identical, so
+  a Windows readiness adapter cannot drift from the POSIX poller's semantics."
+  [read-h write-h adapter?]
+  (let [poller
+        {:jolt.net/poller true
+         :jolt.net/readiness-adapter adapter?
+         :id (swap! next-poller inc)
+         :lifecycle (atom {:phase :open :awaiting? false})
+         :registrations (atom {})
+         :mutations (atom [])
+         :draining (atom false)
+         :wake-pending (atom false)
+         :wake-sequence (atom 0)
+         :wake-admission (atom {:phase :open :writers 0})
+         :next-registration (atom 0)
+         :wake-read read-h
+         :wake-write write-h}]
+    (assoc poller :close (fn [] (close! poller) nil))))
+
+(defn open-readiness-adapter
+  "INTERNAL, Windows only. A poller running the WSAPoll readiness backend with
+  NO wake transport.
+
+  This is not `open` and is deliberately not reachable through the public
+  jolt.net API. It exists so task W3 can exercise real WSAPoll readiness under
+  the shared token machinery before task W4 supplies an owner-independent
+  Windows wake transport. What it does NOT provide, and refuses rather than
+  fakes:
+
+    - `wake!` throws; there is no byte to write.
+    - `close!` throws while an await is running; terminal close against a
+      blocked await needs the wake transport.
+    - a mutation acknowledged during a running native wait is visible to the
+      NEXT await, not to the one already parked. Awaits here are sequential.
+
+  Stale-event rejection is NOT weakened: `current-token?` gates this backend
+  exactly as it gates POSIX, which is the invariant W3 proves."
+  []
+  (when-not (= :windows (:os (jolt.host/target)))
+    (unsupported! :open-readiness-adapter))
+  ;; Winsock must be up before WSAPoll, as for every other Winsock entry point.
+  (nffi/ensure-subsystem!)
+  (poller-value nil nil true))
+
 (defn open
   "Open a POSIX poller with a non-blocking self-pipe waker."
   []
@@ -329,28 +437,15 @@
   (let [fds (ffi/alloc 8)]
     (try
       (err/checked-captured
-        :pipe neg? (nffi/invoke-captured :pipe fds))
+       :pipe neg? (nffi/invoke-captured :pipe fds))
       (let [read-raw (ffi/read fds :int 0)
             write-raw (ffi/read fds :int 4)]
         (try
           (nb/set-raw! read-raw)
           (nb/set-raw! write-raw)
           (let [read-h (h/own read-raw :poller-wake-read {})
-                write-h (h/own write-raw :poller-wake-write {})
-                poller
-                {:jolt.net/poller true
-                 :id (swap! next-poller inc)
-                 :lifecycle (atom {:phase :open :awaiting? false})
-                 :registrations (atom {})
-                 :mutations (atom [])
-                 :draining (atom false)
-                 :wake-pending (atom false)
-                 :wake-sequence (atom 0)
-                 :wake-admission (atom {:phase :open :writers 0})
-                 :next-registration (atom 0)
-                 :wake-read read-h
-                 :wake-write write-h}]
-            (assoc poller :close (fn [] (close! poller) nil)))
+                write-h (h/own write-raw :poller-wake-write {})]
+            (poller-value read-h write-h false))
           (catch :default e
             (h/raw-close! read-raw)
             (h/raw-close! write-raw)
@@ -396,19 +491,15 @@
   "Wake one blocked await. Multiple outstanding wakes are coalesced."
   [poller]
   (require-open! poller :wake)
+  ;; Explicit wake is a W4 obligation on Windows. Refusing here keeps the
+  ;; contract honest: there is no byte to write, and finite polling is not
+  ;; cancellation.
+  (require-wake-transport! poller :wake)
   (signal-wake! poller))
 
-(defn- interest-mask [interests]
-  (bit-or (if (contains? interests :read) (t/const d :pollin) 0)
-          (if (contains? interests :write) (t/const d :pollout) 0)))
-
-(defn- event-set [bits]
-  (cond-> #{}
-    (not (zero? (bit-and bits (t/const d :pollin)))) (conj :read)
-    (not (zero? (bit-and bits (t/const d :pollout)))) (conj :write)
-    (not (zero? (bit-and bits (t/const d :pollerr)))) (conj :error)
-    (not (zero? (bit-and bits (t/const d :pollhup)))) (conj :hangup)
-    (not (zero? (bit-and bits (t/const d :pollnval)))) (conj :error)))
+;; Interest masking and event normalization moved to jolt.net.readiness, which
+;; reads both platforms' flag values from the probed table. They are not
+;; reimplemented here: the shared layer must not carry one target's constants.
 
 (defn- drain-wake-pipe! [poller raw]
   (let [buf (ffi/alloc 64)
@@ -483,10 +574,7 @@
   [poller buf n wait-ms]
   (if-let [hook (:jolt.net/poll-call poller)]
     (hook buf n wait-ms)
-    (let [[result code] (nffi/invoke-captured :poll buf n wait-ms)]
-      (if (neg? result)
-        {:result result :code code}
-        {:result result}))))
+    (r/wait! buf n wait-ms)))
 
 (defn- monotonic-nanos
   "Read the deadline clock. The optional map hook is an internal deterministic
@@ -504,7 +592,12 @@
   make close unbounded. Error and hangup are reported independently of requested
   interests; readable data is never discarded merely because hangup is also set."
   [poller timeout-ms]
-  (require-posix! :await-ready)
+  ;; The public POSIX poller is target-gated at `open`. The Windows readiness
+  ;; adapter is a separate, internal constructor that has already established
+  ;; its own preconditions, so it carries a marker rather than re-deriving a
+  ;; target check that would reject it.
+  (when-not (:jolt.net/readiness-adapter poller)
+    (require-posix! :await-ready))
   (when-not (and (integer? timeout-ms) (not (neg? timeout-ms)))
     (throw (err/invalid-ex :await-ready
                            "timeout-ms must be a non-negative integer"
@@ -518,88 +611,94 @@
           socket-leases (atom [])]
       (try
         (drain-mutations! poller)
-        (let [wl (h/acquire! (:wake-read poller))
+        (let [;; Whether this poller has a wake transport beneath it. POSIX
+              ;; always does. The Windows readiness adapter does not until W4,
+              ;; and `base` is what keeps that difference to an array offset
+              ;; instead of a second copy of this function.
+              wake? (some? (:wake-read poller))
+              base (if wake? 1 0)
+              wl (when wake? (h/acquire! (:wake-read poller)))
               _ (reset! wake-lease wl)
               ;; A mutation completed before this await may have left a
               ;; coalesced byte in the pipe. Its state is already acknowledged,
               ;; so consume it before taking the native snapshot.
-              _ (when @(:wake-pending poller)
+              _ (when (and wake? @(:wake-pending poller))
                   (drain-wake-pipe! poller (:raw wl)))
-              _ (when (not= entry-wake-sequence
-                            @(:wake-sequence poller))
+              _ (when (and wake?
+                           (not= entry-wake-sequence
+                                 @(:wake-sequence poller)))
                   (ensure-wake-byte! poller))
               snapshot (acquire-snapshot poller)
               _ (reset! socket-leases (:leases snapshot))
               entries (:entries snapshot)
-              layout (t/layout d :pollfd)
-              size (:size layout)
-              n (+ 1 (count entries))
-              buf (ffi/alloc (* size n))]
-          (try
-            (ffi/write buf :int (:fd layout) (:raw wl))
-            (ffi/write buf :int16 (:events layout) (t/const d :pollin))
-            (ffi/write buf :int16 (:revents layout) 0)
-            (doseq [[idx entry] (map-indexed vector entries)]
-              (let [p (+ buf (* size (inc idx)))]
-                (ffi/write p :int (:fd layout) (:raw entry))
-                (ffi/write p :int16 (:events layout)
-                           (interest-mask (:interests entry)))
-                (ffi/write p :int16 (:revents layout) 0)))
-            (let [deadline (+ (monotonic-nanos poller)
-                              (* timeout-ms 1000000))
-                  poll-result
-                  (loop []
-                    (let [remaining (max 0 (- deadline
-                                              (monotonic-nanos poller)))
-                          remaining-ms (quot (+ remaining 999999) 1000000)
-                          wait-ms (min remaining-ms max-native-wait-ms)
-                          outcome (poll-once poller buf n wait-ms)
-                          result (:result outcome)]
-                      (cond
-                        (neg? result)
-                        (let [code (:code outcome)]
+              n (+ base (count entries))]
+          ;; With a wake transport the array always holds at least the pipe, so
+          ;; this can only trip on the wake-less adapter. It is a hard error
+          ;; rather than a timed sleep: with nothing registered and no wake,
+          ;; nothing could ever become ready, and WSAPoll rejects an empty array
+          ;; with WSAEINVAL anyway. Sleeping out the deadline here would be
+          ;; exactly the emulated wait this slice must not invent.
+          (when (zero? n)
+            (throw (err/invalid-ex
+                    :await-ready
+                    "this readiness adapter has no wake transport, so an await with no registrations can never complete"
+                    {:jolt.net/requires :windows-wake-transport})))
+          (let [buf (r/alloc-entries n)]
+            (try
+              ;; Slot 0 is the wake pipe's read end wherever one exists.
+              (when wake? (r/encode! buf 0 (:raw wl) #{:read}))
+              (doseq [[idx entry] (map-indexed vector entries)]
+                (r/encode! buf (+ base idx) (:raw entry) (:interests entry)))
+              (let [deadline (+ (monotonic-nanos poller)
+                                (* timeout-ms 1000000))]
+                poll-result
+                (loop []
+                  (let [remaining (max 0 (- deadline
+                                            (monotonic-nanos poller)))
+                        remaining-ms (quot (+ remaining 999999) 1000000)
+                        wait-ms (min remaining-ms max-native-wait-ms)
+                        outcome (poll-once poller buf n wait-ms)
+                        result (:result outcome)]
+                    (cond
+                      (neg? result)
+                      (let [code (:code outcome)]
                           ;; A signal does not consume the caller's timeout.
                           ;; Retry against the same absolute monotonic deadline.
-                          (if (= code (t/errno-code d :eintr))
-                            (if (< (monotonic-nanos poller) deadline)
-                              (recur)
+                        (if (= code (t/errno-code d :eintr))
+                          (if (< (monotonic-nanos poller) deadline)
+                            (recur)
                               ;; poll may leave revents undefined on failure.
                               ;; A deadline-expired interruption is therefore a
                               ;; timeout sentinel, not an empty native result.
-                              nil)
-                            (throw (err/native-ex :poll code nil))))
+                            nil)
+                          (throw (err/native-ex :poll code nil))))
 
                         ;; The ceiling is a lost-wake safety net, not an early
                         ;; return from the caller's timeout.
-                        (and (zero? result)
-                             (pos? remaining)
-                             (< (monotonic-nanos poller) deadline))
-                        (recur)
+                      (and (zero? result)
+                           (pos? remaining)
+                           (< (monotonic-nanos poller) deadline))
+                      (recur)
 
-                        :else result)))]
+                      :else result))))
               (if (nil? poll-result)
-                []
-                (do
-                  (let [wake-bits (ffi/read buf :int16 (:revents layout))]
-                    (when-not (zero? wake-bits)
-                      (drain-wake-pipe! poller (:raw wl))))
-                  (drain-mutations! poller)
-                  (reduce
+                [(do
+                   (when wake?
+                     (let [wake-bits (r/revents buf 0)]
+                       (when-not (zero? wake-bits)
+                         (drain-wake-pipe! poller (:raw wl)))))
+                   (drain-mutations! poller)
+                   (reduce
                     (fn [ready [idx entry]]
-                      (let [p (+ buf (* size (inc idx)))
-                            bits (ffi/read p :int16 (:revents layout))
-                            events (event-set bits)
-                            current (get @(:registrations poller)
-                                         (:jolt.net/registration
-                                           (:token entry)))]
+                      (let [bits (r/revents buf (+ base idx))
+                            events (r/event-set bits)]
                         (if (and (seq events)
-                                 current
-                                 (= (:token entry) (:token current)))
+                                 (current-token? poller (:token entry)))
                           (conj ready
                                 {:token (:token entry) :events events})
                           ready)))
                     []
-                    (map-indexed vector entries)))))
+                    (map-indexed vector entries)))]))
             (finally (ffi/free buf))))
         (finally
           (doseq [lease @socket-leases] (h/release! lease))

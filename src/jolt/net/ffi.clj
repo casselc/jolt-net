@@ -128,6 +128,15 @@
 ;; negative when read as a signed long; see jolt.net.target.
 (ffi/defcfn w-ioctlsocket-with-error "ioctlsocket" [:uptr :int :pointer] :int
   {:capture-native-error true})
+;; int WSAAPI WSAPoll(LPWSAPOLLFD fdArray, ULONG fds, INT timeout).
+;;
+;; `fds` is :uint because a Windows ULONG is 32 bits even on Win64 -- it is NOT
+;; the pointer-width nfds_t that POSIX poll takes, so p-poll-size-with-error's
+;; shape would misplace the timeout. The probe pins this by initializing a typed
+;; function pointer from WSAPoll, which does not compile if the declaration
+;; differs. :blocking because WSAPoll parks for the whole timeout.
+(ffi/defcfn w-wsapoll-with-error "WSAPoll" [:pointer :uint :int] :int
+  {:blocking true :capture-native-error true})
 (ffi/defcfn w-wsastartup  "WSAStartup"  [:uint16 :pointer] :int)
 
 ;; --- resolver (same signature on both) --------------------------------------
@@ -186,6 +195,12 @@
      ;; :ioctlsocket entry on POSIX, so a mis-selected transition fails closed
      ;; at invoke-captured rather than calling something plausible
      :ioctlsocket w-ioctlsocket-with-error
+     ;; The Windows counterpart of POSIX :poll, keyed apart for the same
+     ;; fail-closed reason. There is no `poll` symbol in ws2_32 and no
+     ;; :wsapoll entry on POSIX, so a backend that reached for the wrong one
+     ;; raises "no captured binding" instead of resolving something plausible
+     ;; and handing it a struct laid out for the other platform.
+     :wsapoll w-wsapoll-with-error
      :getaddrinfo c-getaddrinfo-with-error}
     {:socket p-socket-with-error
      :bind p-bind-with-error

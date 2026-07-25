@@ -103,11 +103,40 @@
            ;; 32-bit int; the header casts it to long, and this is that signed
            ;; long value -- the exact bits the `long cmd` parameter must carry.
            :o-nonblock nil :f-getfl nil :f-setfl nil
-           :fionbio -2147195266}
+           :fionbio -2147195266
+           ;; WSAPoll readiness flags. Same key names as POSIX because the
+           ;; poller reads them through this table -- and COMPLETELY different
+           ;; values, which is exactly why they are probed per target rather
+           ;; than shared. Carrying the POSIX numbers here would request
+           ;; POLLERR|POLLHUP (1|2) as interests and silently never ask for
+           ;; readable at all.
+           :pollin 768 :pollout 16 :pollerr 1 :pollhup 2 :pollnval 4
+           ;; The components POLLIN and POLLOUT are built from. Winsock defines
+           ;; POLLIN as POLLRDNORM|POLLRDBAND and POLLOUT as POLLWRNORM alone,
+           ;; so the composition is recorded as evidence instead of assumed.
+           ;; POLLPRI is accepted in `events` but WSAPoll never reports it.
+           :pollrdnorm 256 :pollrdband 512 :pollpri 1024
+           :pollwrnorm 16 :pollwrband 32}
+
+   ;; int WSAAPI WSAPoll(LPWSAPOLLFD fdArray, ULONG fds, INT timeout).
+   ;; `fds` is a 32-bit ULONG -- NOT the pointer-width nfds_t POSIX poll takes --
+   ;; and the timeout is a signed INT of milliseconds. Probed by initializing a
+   ;; typed function pointer from WSAPoll, which does not compile if the real
+   ;; declaration differs. :nfds-type stays nil above because that key means
+   ;; POSIX nfds_t, which does not exist here.
+   :wsapoll {:fds-bytes 4 :timeout-bytes 4 :result-bytes 4}
 
    :layout {:sockaddr-in {:size 16 :family 0 :port 2 :addr 4}
             :sockaddr-in6 {:size 28 :family 0 :port 2 :flowinfo 4 :addr 8 :scope-id 24}
             :sockaddr-storage {:size 128}
+            ;; WSAPOLLFD is NOT struct pollfd, and is deliberately keyed apart
+            ;; from it so no call site can reach a POSIX offset on this target.
+            ;; Its first member is a pointer-width SOCKET rather than an int, so
+            ;; events/revents land at 8/10 in a 16-byte struct (4 bytes of tail
+            ;; padding) instead of 4/6 in an 8-byte one. Writing a POSIX pollfd
+            ;; into this array would put the handle and both event words in the
+            ;; wrong places -- memory corruption, not a wrong answer.
+            :wsapollfd {:size 16 :fd 0 :events 8 :revents 10}
             ;; ai_canonname precedes ai_addr here (the reverse of Linux), and
             ;; ai_addrlen is size_t -- 8 bytes, not socklen_t's 4. jolt.mvn-http
             ;; reads it as :int and only gets away with it because Win64 is

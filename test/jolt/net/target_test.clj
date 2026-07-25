@@ -60,6 +60,26 @@
         (when-let [pollfd (get-in probe [:layout :pollfd])]
           (c/check (str label ": pollfd layout matches")
                    {} (diff-map pollfd (get-in d [:layout :pollfd]))))
+        ;; WSAPOLLFD is compared under its OWN key. A POSIX pollfd fact must
+        ;; never satisfy it: the offsets differ because the first member is a
+        ;; pointer-width SOCKET rather than an int.
+        (when-let [wsapollfd (get-in probe [:layout :wsapollfd])]
+          (c/check (str label ": WSAPOLLFD layout matches")
+                   {} (diff-map (dissoc wsapollfd :fd-bytes :events-bytes
+                                        :revents-bytes)
+                                (get-in d [:layout :wsapollfd])))
+          (c/check (str label ": WSAPOLLFD fd is the socket handle width")
+                   (:fd-bytes wsapollfd) (handle-bytes d))
+          ;; The encoder writes both event words as 16-bit cells. If Winsock
+          ;; ever widened SHORT here, that write would be short of the field.
+          (c/check (str label ": WSAPOLLFD events word is 16 bits")
+                   2 (:events-bytes wsapollfd))
+          (c/check (str label ": WSAPOLLFD revents word is 16 bits")
+                   2 (:revents-bytes wsapollfd)))
+        ;; Unconditional on purpose: on POSIX the assertion is that no WSAPoll
+        ;; signature fact exists to be reached by mistake.
+        (c/check (str label ": WSAPoll signature widths match")
+                 (:wsapoll probe) (:wsapoll d))
         ;; addrinfo carries the field ORDER difference that bites in practice:
         ;; Linux puts ai_addr before ai_canonname, Windows and macOS the reverse.
         (c/check (str label ": addrinfo layout matches")
