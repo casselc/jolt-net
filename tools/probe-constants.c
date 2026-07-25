@@ -27,6 +27,15 @@
 #include <stddef.h>
 
 #ifdef _WIN32
+   /* WSAPOLLFD and WSAPoll are declared only for Vista and later. Raise the
+      floor if the toolchain left it lower, but never lower a higher default:
+      the point is to see the real declarations, not to pin an old SDK. */
+#  ifndef _WIN32_WINNT
+#    define _WIN32_WINNT 0x0600
+#  elif _WIN32_WINNT < 0x0600
+#    undef _WIN32_WINNT
+#    define _WIN32_WINNT 0x0600
+#  endif
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
 #  define OS_NAME "windows"
@@ -93,6 +102,20 @@ int main(void) {
        initialize exactly one u_long without relying on incidental layout. */
     printf(" :ioctl-cmd-bytes %zu\n", sizeof(long));
     printf(" :ioctl-arg-bytes %zu\n", sizeof(u_long));
+    /* WSAPoll's exact declared signature. The typed function-pointer
+       initialization below does not merely record widths -- it FAILS TO
+       COMPILE unless <winsock2.h> really declares
+           int WSAAPI WSAPoll(LPWSAPOLLFD fdArray, ULONG fds, INT timeout)
+       so the sizes printed under it describe the prototype the linker will
+       actually call rather than a plausible reconstruction of one. Note that
+       `fds` is a 32-bit ULONG, NOT the pointer-width nfds_t of POSIX poll, and
+       that the timeout is a signed INT in milliseconds. */
+    {
+        int (WSAAPI *wsapoll_signature)(LPWSAPOLLFD, ULONG, INT) = WSAPoll;
+        (void)wsapoll_signature;
+    }
+    printf(" :wsapoll {:fds-bytes %zu :timeout-bytes %zu :result-bytes %zu}\n",
+           sizeof(ULONG), sizeof(INT), sizeof(int));
 #else
     printf(" :nfds-bytes %zu\n", sizeof(nfds_t));
     printf(" :ioctl-cmd-bytes nil\n");
@@ -164,12 +187,28 @@ int main(void) {
 #else
     KNIL(":fionbio");
 #endif
-#ifndef _WIN32
+    /* Readiness flags. Both platforms spell them POLL*, and jolt.net's poller
+       reads them through the same descriptor keys -- but the VALUES are
+       unrelated, so they must be probed on each platform rather than carried
+       across. Winsock builds POLLIN out of POLLRDNORM|POLLRDBAND and POLLOUT
+       out of POLLWRNORM alone; those components are emitted separately so the
+       composition is visible evidence instead of an assumed identity. */
     K(":pollin", POLLIN);
     K(":pollout", POLLOUT);
     K(":pollerr", POLLERR);
     K(":pollhup", POLLHUP);
     K(":pollnval", POLLNVAL);
+#ifdef _WIN32
+    /* Windows-only keys. They are NOT emitted as nil on POSIX: the committed
+       linux/darwin probe files are compared byte-for-byte by CI, and this
+       probe cannot be re-run on a Mac from a Windows or WSL host. Adding a key
+       to the POSIX column would invalidate a baseline nothing here can
+       regenerate. Absent means absent. */
+    K(":pollrdnorm", POLLRDNORM);
+    K(":pollrdband", POLLRDBAND);
+    K(":pollpri", POLLPRI);
+    K(":pollwrnorm", POLLWRNORM);
+    K(":pollwrband", POLLWRBAND);
 #endif
     printf(" }\n");
 
@@ -194,6 +233,23 @@ int main(void) {
            offsetof(struct pollfd, fd),
            offsetof(struct pollfd, events),
            offsetof(struct pollfd, revents));
+#else
+    /* WSAPOLLFD is NOT struct pollfd. Its first member is a pointer-width
+       SOCKET rather than an int, so events/revents do not sit where the POSIX
+       layout puts them and the struct carries tail padding the POSIX one does
+       not. Emitted under its own key, with every field width spelled out, so
+       nothing here can be satisfied by a POSIX pollfd fact that happens to be
+       nearby. The struct-tag spelling is deliberate: MinGW and MSVC agree on
+       the WSAPOLLFD typedef, and reading its members is the whole point. */
+    printf("  :wsapollfd {:size %zu :fd %zu :events %zu :revents %zu"
+           " :fd-bytes %zu :events-bytes %zu :revents-bytes %zu}\n",
+           sizeof(WSAPOLLFD),
+           offsetof(WSAPOLLFD, fd),
+           offsetof(WSAPOLLFD, events),
+           offsetof(WSAPOLLFD, revents),
+           sizeof(((WSAPOLLFD *)0)->fd),
+           sizeof(((WSAPOLLFD *)0)->events),
+           sizeof(((WSAPOLLFD *)0)->revents));
 #endif
     printf("  :addrinfo {:size %zu :flags %zu :family %zu :socktype %zu :protocol %zu :addrlen %zu :canonname %zu :addr %zu :next %zu :addrlen-bytes %zu}\n",
            sizeof(struct addrinfo),

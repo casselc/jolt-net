@@ -487,7 +487,10 @@ jobs:
         shell: cmd
         run: |
           call "%GITHUB_WORKSPACE%\chez-arm64\c\vs.bat" x64_arm64
-          cl /nologo /W4 /Od /Fe:"%GITHUB_WORKSPACE%\probe-windows-aarch64.exe" "%GITHUB_WORKSPACE%\tools\probe-constants.c"
+          rem ws2_32.lib is required because the probe takes the address of
+          rem WSAPoll to pin that function's exact declared signature, so the
+          rem symbol has to resolve. The probe still opens no socket.
+          cl /nologo /W4 /Od /Fe:"%GITHUB_WORKSPACE%\probe-windows-aarch64.exe" "%GITHUB_WORKSPACE%\tools\probe-constants.c" /link ws2_32.lib
           "%GITHUB_WORKSPACE%\probe-windows-aarch64.exe" > "%GITHUB_WORKSPACE%\tools\probed\windows-aarch64.edn"
           type "%GITHUB_WORKSPACE%\tools\probed\windows-aarch64.edn"
           findstr /C:":arch :aarch64" "%GITHUB_WORKSPACE%\tools\probed\windows-aarch64.edn" >NUL
