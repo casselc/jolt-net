@@ -580,7 +580,9 @@
         ;; The forced admission models the lifecycle CAS only; no real waiter
         ;; exists to run exit-await!, so retire it explicitly before cleanup.
         (swap! (:lifecycle p) assoc :awaiting? false)
-        (poller/close! p))))
+        ;; Close through the unhooked value; calling through p would force the
+        ;; same synthetic interleaving a second time during cleanup.
+        (poller/close! p0))))
 
   ;; Block at the native-call seam after await has atomically published
   ;; :awaiting? true. This is a lifecycle gate, not another WSAPoll ABI oracle;
