@@ -45,8 +45,8 @@
       (quot (+ remaining 999999) 1000000)
       0)))
 
-(defn- read-ready-by!
-  "Attempt one positive-length non-blocking read, waiting only after
+(defn- read-once-by!
+  "Complete one positive-length non-blocking read result, waiting only after
   would-block and retrying under the caller's absolute monotonic deadline."
   [poller socket dest offset length deadline]
   (loop []
@@ -58,6 +58,50 @@
             (recur))
           net/would-block)
         result))))
+
+(defn- read-exactly-by!
+  "Fill one destination window through arbitrary positive short reads."
+  [poller socket dest offset length deadline]
+  (loop [progress 0]
+    (if (= progress length)
+      progress
+      (let [result (read-once-by! poller socket dest (+ offset progress)
+                                  (- length progress) deadline)]
+        (cond
+          (= net/eof result) net/eof
+          (= net/would-block result) net/would-block
+          (and (integer? result) (pos? result))
+          (recur (+ progress result))
+          :else
+          (throw (ex-info "positive-length read made no progress"
+                          {:result result :progress progress})))))))
+
+(defn- write-exactly-by!
+  "Drain one source window through arbitrary positive short writes."
+  [socket src offset length deadline]
+  (let [poller (net/open-poller)]
+    (try
+      (net/register! poller socket #{:write})
+      (loop [progress 0]
+        (if (= progress length)
+          progress
+          (let [result (net/try-write-bytes! socket src (+ offset progress)
+                                             (- length progress))]
+            (cond
+              (= net/would-block result)
+              (if (< (jolt.host/monotonic-nanos) deadline)
+                (do
+                  (net/await-ready poller (remaining-ms deadline))
+                  (recur progress))
+                net/would-block)
+
+              (and (integer? result) (pos? result))
+              (recur (+ progress result))
+
+              :else
+              (throw (ex-info "positive-length write made no progress"
+                              {:result result :progress progress}))))))
+      (finally (net/close! poller)))))
 
 (defn- complete-connect-by!
   "The connector-layer composition this substrate is intended to enable:
@@ -304,16 +348,17 @@
     (try
       (net/register! p server #{:read})
       (let [dest (byte-array 6)
-            src (byte-array [10 20 30 40 50])]
+            src (byte-array [10 20 30 40 50])
+            transfer-deadline
+            (+ (jolt.host/monotonic-nanos) 2000000000)]
         (c/check "empty non-blocking read reports would-block"
                  net/would-block (net/try-read-bytes! server dest 0 6))
         (c/check "zero-length read is the only read that returns zero"
                  0 (net/try-read-bytes! server dest 0 0))
-        (c/check "slice write reports its byte count"
-                 3 (net/try-write-bytes! client src 1 3))
-        (c/check "slice read reports its byte count"
-                 3 (read-ready-by! p server dest 2 3
-                                   (+ (jolt.host/monotonic-nanos) 2000000000)))
+        (c/check "slice write completes through partial progress"
+                 3 (write-exactly-by! client src 1 3 transfer-deadline))
+        (c/check "slice read completes through partial progress"
+                 3 (read-exactly-by! p server dest 2 3 transfer-deadline))
         (c/check "read and write honor both array offsets"
                  [0 0 20 30 40 0] (vec dest))
         (net/shutdown! client :write)
@@ -322,8 +367,8 @@
         ;; would-block until the bytes or FIN become readable.
         (c/check "shutdown-write is observed as the EOF value"
                  net/eof
-                 (read-ready-by! p server dest 0 1
-                                 (+ (jolt.host/monotonic-nanos) 2000000000))))
+                 (read-once-by! p server dest 0 1
+                                (+ (jolt.host/monotonic-nanos) 2000000000))))
       (finally
         (net/close! p)
         (net/close! client)

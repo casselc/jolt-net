@@ -446,12 +446,15 @@ because bytes and FIN happened to be observable before the reads, but that
 timing was not a portable contract.
 
 **Design and executable control.** `jolt.net.poller-test` registers the receiver
-before send, and one bounded helper handles both payload and terminal reads:
-attempt once; only on `would-block`, await read/hangup readiness; then retry
-under the caller's one absolute monotonic deadline. The test requires the three
-payload bytes and offsets to be exact before shutting down the peer write side,
-then requires the eventual positive-length read to return `jolt.net/eof`. It
-separately requires a zero-length read to return zero.
+before send. Bounded progress helpers advance source and destination offsets
+through arbitrary positive short writes/reads; only `would-block` awaits the
+matching write or read/hangup readiness, and every retry uses the operation's
+one absolute monotonic deadline. The test requires the three payload bytes and
+guard offsets to be exact before shutting down the peer write side, then
+requires the eventual positive-length read to return `jolt.net/eof`. It
+separately requires a zero-length read to return zero. The helpers are a
+consumer-level composition check, not a claim that one native call transfers a
+whole window.
 
 This is an environmental temporal premise, not a useful SMT state-space claim:
 an SMT model saying “FIN is visible after readiness” would merely assume the
