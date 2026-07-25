@@ -149,6 +149,21 @@
          (throw (native-ex op code ctx)))
        r))))
 
+(defn checked-captured
+  "Interpret an atomic `[native-result native-error]` pair.
+
+  Unlike `checked`, this function never reads the thread's current native-error
+  slot: the matching code was captured inside the foreign return transition,
+  before a collect-safe call could reactivate the runtime. The second element is
+  ignored on success because native APIs do not promise to clear stale error
+  state."
+  ([op fail? captured] (checked-captured op fail? captured nil))
+  ([op fail? captured ctx]
+   (let [[result code] captured]
+     (if (fail? result)
+       (throw (native-ex op code ctx))
+       result))))
+
 ;; --- resolver errors --------------------------------------------------------
 ;; getaddrinfo returns its code DIRECTLY and does not set errno (except
 ;; EAI_SYSTEM), so it needs its own path. Note glibc's EAI_* are negative while

@@ -193,8 +193,11 @@
 (defn- native-blocking-accept
   [listener]
   (let [raw (h/raw-open listener)
-        c (err/checked :accept #(not (nffi/handle-valid? %))
-                       #(nffi/invoke :accept raw ffi/null ffi/null) nil)]
+        c (err/checked-captured
+            :accept
+            #(not (nffi/handle-valid? %))
+            (nffi/invoke-captured :accept raw ffi/null ffi/null)
+            nil)]
     (try
       ;; the accepted socket does not inherit SO_NOSIGPIPE on BSD
       (when-let [nosig (t/const d :so-nosigpipe)]
@@ -306,7 +309,10 @@
                    (apply-options! raw opts ctx)
                    (with-sockaddr a
                      (fn [p len]
-                       (err/checked :connect neg? #(nffi/invoke :connect raw p len) ctx)))
+                       (err/checked-captured
+                         :connect neg?
+                         (nffi/invoke-captured :connect raw p len)
+                         ctx)))
                    (when (poller-runtime?)
                      (nb/set-raw! raw ctx))
                    (let [socket

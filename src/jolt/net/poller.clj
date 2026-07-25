@@ -478,15 +478,14 @@
           (recur))))))
 
 (defn- poll-once
-  "Invoke poll and capture errno before any other native call. The optional map
-  hook is an internal deterministic EINTR test seam."
+  "Invoke poll with its atomically captured errno. The optional map hook is an
+  internal deterministic EINTR test seam."
   [poller buf n wait-ms]
   (if-let [hook (:jolt.net/poll-call poller)]
     (hook buf n wait-ms)
-    (let [result (nffi/invoke :poll buf n wait-ms)]
+    (let [[result code] (nffi/invoke-captured :poll buf n wait-ms)]
       (if (neg? result)
-        (let [code (err/capture)]
-          {:result result :code code})
+        {:result result :code code}
         {:result result}))))
 
 (defn await-ready

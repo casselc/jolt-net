@@ -28,9 +28,11 @@
 (ffi/defcfn p-socket      "socket"      [:int :int :int] :int)
 (ffi/defcfn p-bind        "bind"        [:int :pointer :uint] :int)
 (ffi/defcfn p-listen      "listen"      [:int :int] :int)
-(ffi/defcfn p-accept      "accept"      [:int :pointer :pointer] :int :blocking)
+(ffi/defcfn p-accept-with-error "accept" [:int :pointer :pointer] :int
+  {:blocking true :capture-native-error true})
 (ffi/defcfn p-try-accept  "accept"      [:int :pointer :pointer] :int)
-(ffi/defcfn p-connect     "connect"     [:int :pointer :uint] :int :blocking)
+(ffi/defcfn p-connect-with-error "connect" [:int :pointer :uint] :int
+  {:blocking true :capture-native-error true})
 (ffi/defcfn p-try-connect "connect"     [:int :pointer :uint] :int)
 (ffi/defcfn p-close       "close"       [:int] :int)
 (ffi/defcfn p-shutdown    "shutdown"    [:int :int] :int)
@@ -38,8 +40,10 @@
 (ffi/defcfn p-getpeername "getpeername" [:int :pointer :pointer] :int)
 (ffi/defcfn p-setsockopt  "setsockopt"  [:int :int :int :pointer :uint] :int)
 (ffi/defcfn p-getsockopt  "getsockopt"  [:int :int :int :pointer :pointer] :int)
-(ffi/defcfn p-recv        "recv"        [:int :pointer :size_t :int] :ssize_t :blocking)
-(ffi/defcfn p-send        "send"        [:int :pointer :size_t :int] :ssize_t :blocking)
+(ffi/defcfn p-recv-with-error "recv" [:int :pointer :size_t :int] :ssize_t
+  {:blocking true :capture-native-error true})
+(ffi/defcfn p-send-with-error "send" [:int :pointer :size_t :int] :ssize_t
+  {:blocking true :capture-native-error true})
 (ffi/defcfn p-try-recv    "recv"        [:int :pointer :size_t :int] :ssize_t)
 (ffi/defcfn p-try-send    "send"        [:int :pointer :size_t :int] :ssize_t)
 ;; POSIX readiness support. fcntl is variadic in C. Its third argument remains
@@ -49,8 +53,10 @@
 (ffi/defcfn p-fcntl       "fcntl"       [:int :int :int] :int
   {:varargs-after 2})
 (ffi/defcfn p-pipe        "pipe"        [:pointer] :int)
-(ffi/defcfn p-poll-size   "poll"        [:pointer :size_t :int] :int :blocking)
-(ffi/defcfn p-poll-uint   "poll"        [:pointer :uint :int] :int :blocking)
+(ffi/defcfn p-poll-size-with-error "poll" [:pointer :size_t :int] :int
+  {:blocking true :capture-native-error true})
+(ffi/defcfn p-poll-uint-with-error "poll" [:pointer :uint :int] :int
+  {:blocking true :capture-native-error true})
 (ffi/defcfn p-read        "read"        [:int :pointer :size_t] :ssize_t)
 (ffi/defcfn p-write       "write"       [:int :pointer :size_t] :ssize_t)
 
@@ -59,15 +65,19 @@
 (ffi/defcfn w-socket      "socket"      [:int :int :int] :uptr)
 (ffi/defcfn w-bind        "bind"        [:uptr :pointer :int] :int)
 (ffi/defcfn w-listen      "listen"      [:uptr :int] :int)
-(ffi/defcfn w-accept      "accept"      [:uptr :pointer :pointer] :uptr :blocking)
-(ffi/defcfn w-connect     "connect"     [:uptr :pointer :int] :int :blocking)
+(ffi/defcfn w-accept-with-error "accept" [:uptr :pointer :pointer] :uptr
+  {:blocking true :capture-native-error true})
+(ffi/defcfn w-connect-with-error "connect" [:uptr :pointer :int] :int
+  {:blocking true :capture-native-error true})
 (ffi/defcfn w-close       "closesocket" [:uptr] :int)
 (ffi/defcfn w-shutdown    "shutdown"    [:uptr :int] :int)
 (ffi/defcfn w-getsockname "getsockname" [:uptr :pointer :pointer] :int)
 (ffi/defcfn w-getpeername "getpeername" [:uptr :pointer :pointer] :int)
 (ffi/defcfn w-setsockopt  "setsockopt"  [:uptr :int :int :pointer :int] :int)
-(ffi/defcfn w-recv        "recv"        [:uptr :pointer :int :int] :int :blocking)
-(ffi/defcfn w-send        "send"        [:uptr :pointer :int :int] :int :blocking)
+(ffi/defcfn w-recv-with-error "recv" [:uptr :pointer :int :int] :int
+  {:blocking true :capture-native-error true})
+(ffi/defcfn w-send-with-error "send" [:uptr :pointer :int :int] :int
+  {:blocking true :capture-native-error true})
 (ffi/defcfn w-wsastartup  "WSAStartup"  [:uint16 :pointer] :int)
 
 ;; --- resolver (same signature on both) --------------------------------------
@@ -79,7 +89,9 @@
 ;; may move during a collection while the call is parked. And the resolver has to
 ;; own and free those C strings anyway, so materializing them explicitly keeps
 ;; the allocation visible rather than hidden behind a marshaling convention.
-(ffi/defcfn c-getaddrinfo  "getaddrinfo"  [:pointer :pointer :pointer :pointer] :int :blocking)
+(ffi/defcfn c-getaddrinfo-with-error
+  "getaddrinfo" [:pointer :pointer :pointer :pointer] :int
+  {:blocking true :capture-native-error true})
 (ffi/defcfn c-freeaddrinfo "freeaddrinfo" [:pointer] :void)
 ;; POSIX only -- Winsock's gai_strerror is a non-thread-safe macro, so on Windows
 ;; messages come from the static table in jolt.net.error instead.
@@ -91,34 +103,60 @@
 (def descriptor (t/descriptor))
 
 (def ^:private windows? (= :windows (:platform descriptor)))
-(def ^:private p-poll
+(def ^:private p-poll-with-error
   (case (:nfds-type descriptor)
-    :size_t p-poll-size
-    :uint p-poll-uint
+    :size_t p-poll-size-with-error
+    :uint p-poll-uint-with-error
     nil))
 
 (def call
   (if windows?
-    {:socket w-socket :bind w-bind :listen w-listen :accept w-accept
-     :connect w-connect :close w-close :shutdown w-shutdown
+    {:socket w-socket :bind w-bind :listen w-listen
+     :close w-close :shutdown w-shutdown
      :getsockname w-getsockname :getpeername w-getpeername
-     :setsockopt w-setsockopt :recv w-recv :send w-send}
-    {:socket p-socket :bind p-bind :listen p-listen :accept p-accept
+     :setsockopt w-setsockopt}
+    {:socket p-socket :bind p-bind :listen p-listen
      :try-accept p-try-accept
-     :connect p-connect :try-connect p-try-connect
+     :try-connect p-try-connect
      :close p-close :shutdown p-shutdown
      :getsockname p-getsockname :getpeername p-getpeername
      :setsockopt p-setsockopt :getsockopt p-getsockopt
-     :recv p-recv :send p-send
      :try-recv p-try-recv :try-send p-try-send
-     :fcntl p-fcntl :pipe p-pipe :poll p-poll :read p-read :write p-write}))
+     :fcntl p-fcntl :pipe p-pipe :read p-read :write p-write}))
+
+(def captured-call
+  (if windows?
+    {:accept w-accept-with-error
+     :connect w-connect-with-error
+     :recv w-recv-with-error
+     :send w-send-with-error
+     :getaddrinfo c-getaddrinfo-with-error}
+    {:accept p-accept-with-error
+     :connect p-connect-with-error
+     :recv p-recv-with-error
+     :send p-send-with-error
+     :poll p-poll-with-error
+     :getaddrinfo c-getaddrinfo-with-error}))
 
 (defn invoke
-  "Call the platform's implementation of `op`. Named ops rather than direct vars
-  so no call site has to know which platform it is on."
+  "Call the platform's scalar implementation of `op`. Named ops rather than
+  direct vars so no call site has to know which platform it is on."
   [op & args]
   (apply (or (get call op)
              (throw (ex-info (str "jolt.net: no binding for " op)
+                             {:jolt.net/kind :invalid :jolt.net/op op})))
+         args))
+
+(defn invoke-captured
+  "Call a failure-sensitive binding that atomically returns
+  `[native-result native-error]`.
+
+  This is deliberately separate from `invoke`: neither dispatcher has an
+  operation-dependent result shape, so a caller cannot accidentally treat a
+  captured pair as an ordinary scalar."
+  [op & args]
+  (apply (or (get captured-call op)
+             (throw (ex-info (str "jolt.net: no captured binding for " op)
                              {:jolt.net/kind :invalid :jolt.net/op op})))
          args))
 
