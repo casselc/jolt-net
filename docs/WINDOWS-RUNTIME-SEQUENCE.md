@@ -389,15 +389,69 @@ Stop after W3 and return the evidence.
 
 ## Task W4: owner-independent Windows wake and close lifecycle
 
-Branch from reviewed W3: `claude/windows-poller-wake`
+Branch from the clean reviewed W3 tip, not Claude's original W3 tip:
+`claude/windows-poller-wake`.
 
-Add a Windows wake transport with explicit ownership and a bounded close
-protocol. A loopback datagram pair is the initial design candidate; validate it
-rather than assuming it. Preserve the existing wake-epoch semantics, mutation
-acknowledgement, close admission, writer drain, and “close returns only after
-the active await and wake handles are retired” contracts. Update all wake,
-short-lease, descriptor-reuse, and close-race models and controls. Add real
-blocked-await, close-vs-wake, close-vs-accept, and repeated-open/close stress.
+Add an owner-independent Windows wake transport and promote the shared poller
+through `jolt.net/open-poller`. A connected IPv4 loopback datagram pair is the
+initial design candidate because both ends are real `SOCKET`s that `WSAPoll`
+understands; probe its behavior under the real gate rather than treating that
+choice as settled. Do not substitute finite polling, sleeps, a thread-owned
+lock, or a second registration/token state machine.
+
+Keep transport policy out of the shared state machine. In particular, the
+POSIX wake path currently names `read`/`write`, whereas a Windows socket wake
+must use the exact captured `recv`/`send` surface and Windows length/result
+widths. Give the poller a small internal wake-transport value or equivalent
+seam owning:
+
+- the read and write handles;
+- non-blocking signal and drain operations with captured native errors;
+- construction rollback and terminal retirement; and
+- any target-specific behavior needed to encode the wake handle in the existing
+  readiness array.
+
+Preserve one shared lifecycle, mutation queue, wake epoch, registration token,
+and readiness decoder. Both datagram sockets must be non-blocking before they
+are published. A one-byte wake send must be admitted under the same
+owner-independent CAS state as close; release the handle lease before
+decrementing the admitted-writer count. Close must publish a terminal wake
+before retiring later sends, wait for admitted sends to drain, retain the
+receiver through the active `WSAPoll` lease, wait for that await to exit, and
+only then retire the receiver and return `:closed`. Datagram peer close is not a
+hangup oracle, so the protocol must rely on the admitted terminal byte rather
+than pretending sender close wakes the receiver.
+
+Promoting Windows into the public poller set also promotes the readiness-driven
+blocking `accept` path. Remove the W2 mixed-mode refusal only when the native
+tests prove the same close callback, terminal wake, short-lease, and
+descriptor-reuse contract already required on POSIX. Do not leave Windows
+listeners on native blocking `accept` while claiming poller-backed close.
+
+Acceptance:
+
+- a dependency-free native W4 PowerShell gate exercises the public
+  `jolt.net/open-poller`, including an empty poller, explicit wake, blocked
+  update/removal, registered-socket close, and terminal poller close;
+- forced interleavings cover close against an admitted wake send, a wake in the
+  drain/reset window, await admission racing close, and receiver-handle
+  retirement; no test uses elapsed sleep as its success oracle;
+- native Windows blocking `accept` is readiness-driven, remains correct after a
+  prior `try-accept`, and listener close is a bounded completion boundary;
+- repeated public-poller and accept open/close stress leaves no owned socket or
+  wake-handle leak and never passes by an unobserved child-process exit code;
+- W1 162, W2 56, reviewed W3 124, the new W4 gate, Linux full
+  Hegel-required tests, and all dependency-free Linux gates pass at the exact
+  source revision;
+- the existing wake-pair and wake-epoch models are generalized only where the
+  implementation premise is genuinely transport-independent. Pipe/SIGPIPE and
+  datagram-terminal-wake claims stay distinct. Every corrected model retains a
+  satisfiable buggy control, a satisfiable useful/non-vacuity control, source
+  anchors, bounded limits, and a decisive named core;
+- platform coverage remains `candidate` until hosted Windows CI runs this exact
+  implementation; and
+- the branch is committed and clean, with exact native commands, counts,
+  revision pins, and proof verdicts reported. Do not push or open a PR.
 
 Stop after W4 and return the evidence.
 
