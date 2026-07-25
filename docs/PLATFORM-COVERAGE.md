@@ -21,7 +21,7 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 |---|---|---|---|---|
 | Linux x86-64 | **probed** | **runtime** | **runtime** | The development and CI platform. Real `fcntl`, `poll`, pipe-wake, sliced byte I/O, EOF, non-blocking connect/`SO_ERROR`, mutation wake, and close races are exercised. |
 | Linux aarch64 | table | none | none | Aliases the x86-64 socket facts: same kernel UAPI, same LP64. An explicit table entry with the checked facts listed — never a `:linux` fallback. |
-| Windows x86-64 | **probed** | none | none | Probed on a real Windows CI runner (and independently via mingw + WSL interop, which agree). Numbers are trustworthy; **no Winsock call has ever been made from jolt on Windows** — there is no packaged Chez Scheme for Windows runners, so the suite cannot run there yet. |
+| Windows x86-64 | **probed** | **candidate** | none | Probed on a real Windows CI runner (and independently via mingw + WSL interop, which agree). A real native Windows machine (Chez 10.4.1, `tools/test-windows-blocking.ps1`) has now made real Winsock calls on commit `4e7dc43`+this task's changes: `WSAStartup` ordering/once-only, real IPv4/IPv6 loopback listen/connect/accept, port-zero, duplicate-bind, and idempotent close all passed. Marked **candidate** rather than **runtime** because this ran locally, not yet on a hosted CI gate (task W5) — see `docs/WINDOWS-RUNTIME-SEQUENCE.md`. |
 | macOS arm64 | **probed** | **runtime** | **runtime** | The complete native suite passes with source-built Chez 10.4.1: variadic-ABI-correct `fcntl`, `poll(2)`, non-blocking connect/`SO_ERROR`, sliced byte I/O, SIGPIPE, close races, and the owner-independent self-pipe protocol, with Darwin's distinct 32-bit `nfds_t` binding. |
 | macOS x86-64 | **table** | none | none | Shares the arm64 descriptor: these are SDK facts rather than arch facts on macOS. Only arm64 is machine-checked. |
 
@@ -29,13 +29,36 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 
 - **Win64 handle width.** `SOCKET` is pointer-width unsigned and `INVALID_SOCKET` is
   all-bits-one, so `neg?` and an `:int` return type are both invalid tests. The
-  predicate is exercised on Linux against synthetic high-bit values, which proves the
-  predicate but not the FFI marshaling of a `:uptr` result ≥ 2^63.
-- **`WSAStartup` once-only initialization** is unexercised.
+  predicate is exercised on Linux against synthetic high-bit values, and a real
+  Windows run now also marshals actual `:uptr` socket handles end to end
+  (listen/connect/accept), though no single observed handle in that run had its
+  high bit set.
+- **`WSAStartup` ordering and once-only initialization are now exercised on a
+  real Windows machine** (task W1, `docs/WINDOWS-RUNTIME-SEQUENCE.md`). The
+  original `10093` (`WSANOTINITIALISED`) witness — `getaddrinfo` resolving
+  before `ensure-subsystem!` ran — is gone because `jolt.net.resolver/resolve`
+  now calls `ensure-subsystem!` directly, not only through `socket-for`. A
+  32-future stress test proved exactly one `WSAStartup` attempt and consistent
+  memoized success across all of them; see
+  `docs/proofs/socket-invariants.md` §0 and
+  `docs/proofs/models/winsock-init-once-*.smt2`.
+- **Refused-connect native code (`WSAECONNREFUSED` / 10061) is NOT proven**,
+  and this is a newly discovered runtime defect, not a jolt-net bug. A raw
+  `socket()`/`connect()` probe below the `jolt.net` API showed `connect()`
+  genuinely returning `-1`, but three immediate, consecutive
+  `WSAGetLastError()` reads afterward all returning `0`. Non-`:blocking` calls
+  on the same target (`bind`/`listen`, duplicate-bind's real `10048`) correctly
+  preserve their codes. This isolates the clobber to the `:blocking`
+  (collect-safe) Winsock FFI calling convention in this proposal-runtime
+  revision (`9dc88108`) — outside jolt-net's own capture ordering and outside
+  task W1's scope to patch, since that runtime is a separate, pinned, detached
+  checkout. `test/jolt/net/blocking_test_main.clj` records this as an honest,
+  diagnosed SKIP rather than a silently weakened assertion or a hidden defect.
 - **Windows readiness** still needs `ioctlsocket(FIONBIO)`, `WSAPoll`, and a
   tested owner-independent wake transport such as a loopback UDP pair. The
   non-blocking connect API fails closed before resolution or socket creation on
   Windows until that backend and real `getsockopt(SO_ERROR)` calls are verified.
+  This is unchanged by task W1, which is scoped to the blocking socket base only.
 - **macOS runtime evidence.** The earlier gate showed that a typed
   three-argument signature is not enough for variadic `fcntl` on Apple arm64:
   the third argument uses the variadic stack ABI. The core binding now declares
@@ -97,9 +120,15 @@ The table test is non-vacuous: corrupting `AF_INET6` or swapping
 
 ## Making this better
 
-The remaining gap is Windows *runtime* coverage. It needs a Chez Scheme build for
-Windows runners; until then the `:uptr` handle marshaling, the `INVALID_SOCKET`
-comparison against a real handle, and once-only `WSAStartup` stay unexercised.
+The remaining gap is Windows *runtime* (hosted-CI) coverage, promoted from the
+**candidate** evidence above only once `tools/test-windows-blocking.ps1` (or its
+successor) runs green as a Windows x86-64 GitHub Actions gate on the exact
+revision — task W5 in `docs/WINDOWS-RUNTIME-SEQUENCE.md`. That still needs a
+Chez Scheme build reachable from a hosted Windows runner. Separately, Windows
+non-blocking I/O, `WSAPoll`, and the wake transport (tasks W2-W4) remain
+unimplemented, and the `:blocking`-call errno-clobber defect noted above needs
+a fix in the proposal runtime before refused-connect's native code can be
+proven on any platform's CI.
 
 CI (`.github/workflows/ci.yml`) re-probes every platform on each push and fails
 the build if a committed descriptor disagrees with that platform's real headers,
