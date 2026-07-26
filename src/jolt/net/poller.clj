@@ -598,6 +598,29 @@
   (require-open! poller :remove)
   (submit! poller {:op :remove :token token}))
 
+(defn wake-cursor
+  "Read this poller's monotonic wake cursor.
+
+  This is the consumer's half of the publication contract, and it exists because
+  \"the await had not started yet\" is NOT the same fact as \"the consumer had
+  already seen the state behind that wake\".
+
+  A producer publishes in one fixed order: it makes its state visible, and only
+  then calls `wake!`, which advances this cursor. A consumer that samples the
+  cursor BEFORE it reads the producer-owned state therefore holds a sound
+  boundary: every wake at or below the sampled value corresponds to state the
+  consumer's own subsequent read was guaranteed to observe, and every wake above
+  it belongs to a publication the consumer may have missed and must not park
+  through. Passing that sample to `await-ready` is what makes the wait
+  undiscardable in the second case.
+
+  Deliberately total: it neither refuses a closing poller nor enters the await
+  lifecycle. Consumers sample it once per reactor turn, before any work that
+  could observe a close, and a refusal here would only move the race rather than
+  remove it. `await-ready` remains the single lifecycle gate."
+  [poller]
+  @(:wake-sequence poller))
+
 (defn wake!
   "Wake one blocked await. Multiple outstanding wakes are coalesced."
   [poller]
@@ -739,8 +762,20 @@
 
   The native wait is capped at one second, so even a missed platform wake cannot
   make close unbounded. Error and hangup are reported independently of requested
-  interests; readable data is never discarded merely because hangup is also set."
-  [poller timeout-ms]
+  interests; readable data is never discarded merely because hangup is also set.
+
+  The three-argument arity takes a `cursor` from `wake-cursor`, sampled by the
+  caller BEFORE it read the producer-owned state it is about to park on. Wakes
+  above that cursor cannot be discarded as stale, so a publication that lands
+  after the caller's read but before this call still arms the wait.
+
+  The two-argument arity samples the cursor here instead. That is only sound
+  when nothing the caller observed could have been published between its read
+  and this call -- it makes THIS CALL the boundary, which is exactly the
+  assumption a reactor that drains its own queue first must not make. Reactors
+  pass an explicit cursor; one-shot waiters with no prior read may omit it."
+  ([poller timeout-ms] (await-ready poller timeout-ms nil))
+  ([poller timeout-ms cursor]
   ;; The public POSIX poller is target-gated at `open`. The Windows readiness
   ;; adapter is a separate, internal constructor that has already established
   ;; its own preconditions, so it carries a marker rather than re-deriving a
@@ -751,10 +786,26 @@
     (throw (err/invalid-ex :await-ready
                            "timeout-ms must be a non-negative integer"
                            {:jolt.net/timeout-ms timeout-ms})))
-  ;; Linearization boundary for explicit wake: an epoch after this read belongs
-  ;; to this await even if it arrives between enter-await! and the pre-snapshot
-  ;; drain. Epochs already visible here predate the await and may be consumed.
-  (let [entry-wake-sequence @(:wake-sequence poller)]
+  (when-not (or (nil? cursor) (integer? cursor))
+    (throw (err/invalid-ex :await-ready
+                           "cursor must be nil or a wake-cursor value"
+                           {:jolt.net/wake-cursor cursor})))
+  ;; Linearization boundary for explicit wake. A caller-supplied cursor moves
+  ;; that boundary back to the caller's own read; nil keeps it here.
+  ;;
+  ;; A cursor ABOVE the live sequence cannot have come from this poller -- the
+  ;; sequence only grows -- so it is a foreign or corrupted value. Refusing is
+  ;; the only safe answer: silently honouring it would mark real, undelivered
+  ;; wakes as stale and reintroduce exactly the lost-wake park this argument
+  ;; exists to prevent.
+  (let [live @(:wake-sequence poller)
+        _ (when (and cursor (> cursor live))
+            (throw (err/invalid-ex
+                    :await-ready
+                    "cursor is ahead of this poller's wake sequence"
+                    {:jolt.net/wake-cursor cursor
+                     :jolt.net/wake-sequence live})))
+        entry-wake-sequence (or cursor live)]
     (enter-await! poller)
     (let [wake-lease (atom nil)
           socket-leases (atom [])]
@@ -845,4 +896,4 @@
         (finally
           (doseq [lease @socket-leases] (h/release! lease))
           (when-let [lease @wake-lease] (h/release! lease))
-          (exit-await! poller))))))
+          (exit-await! poller)))))))

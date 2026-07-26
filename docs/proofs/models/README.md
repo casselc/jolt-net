@@ -349,6 +349,25 @@ interleaving tests supply the semantic oracle:
   32 distinct first-use futures behind a latch/start barrier and asserts exactly
   one real `WSAStartup` attempt.
 
+Task W6A.1 (the jolt-tcp reactor re-arm latency) added three files, bringing the
+directory to 51: `wake-cursor-ordering-corrected.smt2` (**unsat**),
+`wake-cursor-ordering-buggy.smt2` (**sat**), and
+`wake-cursor-ordering-nonvacuity.smt2` (**sat**). The buggy model differs from the
+corrected one by exactly one assertion, the choice of stale/fresh boundary.
+
+That run used BOTH oracles, and they agreed. All 51 files were executed by a
+standalone `z3` 4.8.12 exactly as the shell example above, and every verdict
+matched its declared expectation. The three new files were additionally submitted
+to Chiasmus, which returned the same `unsat` (with a core naming
+`boundary_is_the_caller_cursor`), the same `sat` witness for the buggy model, and
+`sat` for non-vacuity.
+
+These three deliberately overlap `wake-epoch-*` without replacing it. The epoch
+trio proves transport coalescing across the drain/reset window; its violation is
+defined relative to await entry, so it cannot express a publication that is
+already visible when `await-ready` begins. That case is the wake-cursor trio's,
+and it is where the observed defect lived.
+
 The models omit scheduler fairness, native ABI implementation, weak-memory
 behavior beneath Clojure atom linearizability, failure of the atom/promise
 primitives themselves, thread death/cancellation, kernel bugs, numeric

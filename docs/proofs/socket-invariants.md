@@ -362,12 +362,87 @@ where drain captured the newer epoch.
 - `wake-epoch-nonvacuity.smt2` is **sat** for the hard case where the producer
   really coalesces, drain restores the byte, and await progresses.
 
+What this trio does **not** cover is its own boundary. Every one of its claims is
+relative to `entry_epoch`, and its violation is literally
+`(> current_epoch entry_epoch)` — a wake strictly after await entry. A wake that
+is *already visible* when `await-ready` begins is outside the model by
+construction, and the model is silent about whether discarding it is safe. That
+silence was the hole; see the next invariant. The trio remains correct for what
+it does claim: transport coalescing across the drain/reset window.
+
+**Wake-cursor ordering invariant.** "The await had not started yet" is not the
+same fact as "the consumer had already seen the state behind that wake", and
+`await-ready` used to conflate them. It sampled `entry-wake-sequence` at its own
+entry and consumed any already-visible epoch as stale. A consumer that reads
+producer-owned state *before* calling `await-ready` — which is what every reactor
+does — leaves a window between its read and that sample. A publication landing in
+that window is real, unobserved, and was discarded.
+
+jolt-tcp's reactor is exactly that shape: `process-pending!` drains its `:pending`
+set, a worker's `finish-work!` then publishes a generation and calls
+`net/wake!`, and only then does the reactor call `await-ready`. The wake predated
+the *await* but not the *read*. The reactor parked until the 1000 ms native
+safety tick, which is the `base + k * ~1000 ms` latency jolt-http's backpressure
+property measured (seed 9157075391771664454, 93,388 bytes, 1 KB read buffer).
+Bytes were never lost — only delayed — because the tick eventually delivered the
+same pending state.
+
+The fix makes the boundary the caller's, not the callee's. `poller/wake-cursor`
+reads the monotonic sequence; the consumer samples it *before* its own read and
+passes it to `await-ready`, which then refuses to discard anything above it. The
+two halves compose into one contract:
+
+    producer:  publish state       then  wake!  (advances the cursor)
+    consumer:  sample the cursor   then  read that state  then  await
+
+A wake at or below the sampled cursor was published before the consumer's read,
+so the read necessarily observed it and parking is correct. A wake above it
+landed after the read and arms the wait. `await-ready`'s two-argument arity keeps
+the old entry-relative sampling, which is the sound degenerate case for a waiter
+with no prior read; a cursor ahead of the live sequence is refused rather than
+honoured, since honouring it would mark undelivered wakes stale.
+
+- `wake-cursor-ordering-corrected.smt2` is **unsat** for the lost-wake query: no
+  publication can be both missed by the consumer's read and unarmed at native
+  entry. The unsat core names `boundary_is_the_caller_cursor` as load-bearing.
+- `wake-cursor-ordering-buggy.smt2` changes exactly one assertion — the boundary
+  is read at await entry instead of supplied by the caller — and is **sat**. The
+  witness is the production interleaving in miniature, on strictly distinct
+  instants: sample `-1`, read `0`, publish `1`, wake `2`, await entry `3`, native
+  entry `4`, giving `cursor = 0`, `entry_boundary = 1 = current_seq`, no restore,
+  `lost_wake = true`.
+- `wake-cursor-ordering-nonvacuity.smt2` is **sat** for the execution the fix must
+  keep: the consumer's read *did* observe the publication and the wait parks
+  unarmed. This is what rules out the degenerate "always arm" fix, which would
+  also make the corrected query unsat while replacing a 1000 ms park with a spin.
+
+All three were run through standalone Z3 4.8.12 and through Chiasmus, with
+matching verdicts, cores, and witnesses.
+
+The runtime counterpart is `test/jolt/net/wake_cursor_test.clj`, and it measures
+no elapsed time at all. Both the clock and the native call are hooks, so each
+case fixes one interleaving exactly. The observable is `:wake-pending` at native
+entry: a byte in the receiver means poll(2)/WSAPoll returns immediately whatever
+timeout it was handed, so arming — not duration — is the park predicate. It
+checks the forced race (armed), the same interleaving with no cursor (**not**
+armed, which is the deterministic reproduction of the defect and what keeps the
+first case non-vacuous), a publication before the cursor (not armed, correctly),
+and a publication landing inside an already-parked wait (armed on re-entry).
+
 **Accept-terminal invariant.** Given the verified non-blocking transition
 above, a registration-removal wake is intentionally a best-effort state-change
 notification, not a cancellation boundary. Listener close can race just before
 accept enters `await-ready`: the already-published wake is then a pre-entry
 epoch, may be drained before the native snapshot, and cannot by itself
 guarantee prompt accept completion.
+
+This is the same defect class as the wake-cursor invariant above, seen from the
+other side, and the accept loop now also samples `poller/wake-cursor` before
+`try-accept` so a wake published after that attempt arms the wait instead of
+being consumed. The terminal close listener below is **not** removed on the
+strength of that: the cursor closes the notification window, while the close
+listener additionally makes a closed poller *refuse* a later await. Those are
+different guarantees, and retiring the second one is not part of this task.
 
 `accept` therefore owns a second close listener whose only job is terminal:
 it calls `poller/close!`. The listener installs this callback before poller

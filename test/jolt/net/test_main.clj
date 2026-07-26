@@ -9,6 +9,7 @@
             [jolt.net.target-test :as target-test]
             [jolt.net.socket-test :as socket-test]
             [jolt.net.poller-test :as poller-test]
+            [jolt.net.wake-cursor-test :as wake-cursor-test]
             [jolt.net.resolver-test :as resolver-test]
             [jolt.net.address-test :as address-test]
             [clojure.test :as ct]))
@@ -41,6 +42,7 @@
   (resolver-test/run!)
   (socket-test/run!)
   (poller-test/run!)
+  (wake-cursor-test/run!)
 
   ;; Generative properties run under clojure.test (hegel's integration reports
   ;; through it), so fold its counters into the same exit code.
