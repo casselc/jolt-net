@@ -43,6 +43,7 @@
             [jolt.net.poller :as poller]
             [jolt.net.readiness :as r]
             [jolt.net.wake :as wake]
+            [jolt.net.windows-handle-count :as whc]
             [jolt.net :as net]))
 
 (def ^:private d nffi/descriptor)
@@ -555,54 +556,44 @@
 
 ;; --- leak and stress ----------------------------------------------------------
 
-(defn- handle-probe!
-  "Where the handle space currently sits. Opening and immediately closing one
-  socket samples the allocator without perturbing it."
-  []
-  (let [s (net/listen (net/endpoint "127.0.0.1" 0))
-        v (net/native-handle s)]
-    (net/close! s)
-    v))
+;; GetProcessHandleCount measures the resource, not an allocator position. A
+;; complete leak therefore adds one count per leaked SOCKET, independent of how
+;; Windows chooses numeric handle values. Keep a visible noise budget and refuse
+;; the oracle if it ever overlaps the modeled leak floor.
+(def ^:private observed-count-noise 10)
 
-;; How the leak oracle works, and why it is not a tight absolute threshold.
-;;
-;; Windows does not densely reuse handle values the way POSIX reuses fds:
-;; kernel handle values advance in steps of 4 and WANDER, in both directions,
-;; with unrelated activity in the process. Measured here, 60 non-leaking
-;; open/close cycles moved the probe by as much as 112 in either direction. A
-;; threshold set just above that -- the natural "2 * attempts" the W2 rollback
-;; test can afford on its denser path -- would sit only a few percent below the
-;; leak signal, which is not a test, it is a coin flip.
-;;
-;; So the check is SIGNED and scaled to the signal instead. Each public poller
-;; owns two wake sockets, so N leaked pollers consume 2N handles and advance the
-;; space by roughly 8N -- strictly upward, because nothing is ever returned.
-;; Non-leaking churn is bidirectional and bounded. `leak-floor` is set well
-;; below what a real leak would produce and well above observed noise, and both
-;; numbers are printed so a future drift is visible rather than silent.
-(def ^:private observed-noise 150)
-
-(defn- check-no-leak! [label attempts sockets-per-cycle before after]
+(defn- check-no-leak! [label attempts handles-per-cycle before after]
   (let [signed (- after before)
-        leak-signal (* 8 attempts sockets-per-cycle)
+        leak-signal (* attempts handles-per-cycle)
         leak-floor (quot leak-signal 2)]
     (c/check-pred
      (str label " (" attempts " cycles, before " before ", after " after
-          ", signed delta " signed ", a real leak would advance ~"
+          ", signed delta " signed ", a real leak would add "
           leak-signal ", refusing at " leak-floor ")")
      #(< % leak-floor) signed)
-    ;; A guard on the guard: if ambient noise ever grows to approach the leak
-    ;; floor, this oracle has quietly stopped discriminating and must be told
-    ;; about rather than kept passing.
     (c/check-pred
      (str label ": the oracle still separates noise from a leak (noise budget "
-          observed-noise ", leak floor " leak-floor ")")
-     #(< observed-noise %) leak-floor)))
+          observed-count-noise ", leak floor " leak-floor ")")
+     #(< observed-count-noise %) leak-floor)))
+
+(defn- check-handle-count-nonvacuity! []
+  (let [before (whc/current!)
+        sockets (atom [])]
+    (try
+      (dotimes [_ 6]
+        (swap! sockets conj
+               (net/listen (net/endpoint "127.0.0.1" 0))))
+      (c/check-pred
+       "GetProcessHandleCount observes deliberately open sockets"
+       #(<= 6 %) (- (whc/current!) before))
+      (finally
+        (doseq [s @sockets] (net/close! s))))))
 
 (defn- stress-suite! []
   (c/section "w4: repeated construction and close leaks no handle")
+  (check-handle-count-nonvacuity!)
   (let [attempts 60
-        before (handle-probe!)
+        before (whc/current!)
         closed (atom 0)]
     (dotimes [_ attempts]
       (let [p (net/open-poller)]
@@ -612,13 +603,13 @@
              attempts @closed)
     ;; 2 wake sockets per poller.
     (check-no-leak! "poller open/close cycles leak no handles"
-                    attempts 2 before (handle-probe!)))
+                    attempts 2 before (whc/current!)))
 
   (c/section "w4: repeated accept construction and close leaks no handle")
   ;; `accept` builds and tears down its own poller, and therefore its own wake
   ;; pair, on every call -- plus the accepted socket itself.
   (let [attempts 40
-        before (handle-probe!)
+        before (whc/current!)
         accepted (atom 0)]
     (with-listener!
       (fn [l]
@@ -631,7 +622,7 @@
     (c/check "every accept in the loop returned a socket" attempts @accepted)
     ;; 2 wake sockets + the accepted socket + the client socket.
     (check-no-leak! "accept cycles leak no handles"
-                    attempts 4 before (handle-probe!))))
+                    attempts 4 before (whc/current!))))
 
 ;; --- entry point --------------------------------------------------------------
 

@@ -24,6 +24,7 @@
             [jolt.net.handle :as h]
             [jolt.net.nonblocking :as nb]
             [jolt.net.target :as t]
+            [jolt.net.windows-handle-count :as whc]
             [jolt.net :as net]))
 
 (defn- windows? [] (= :windows (:os (jolt.host/target))))
@@ -373,9 +374,12 @@
   ;; Repeating it catches any initiation path that throws without rolling the
   ;; raw descriptor back.
   (let [attempts 50
-        before-socket (net/listen (net/endpoint "127.0.0.1" 0))
-        before (net/native-handle before-socket)
-        _ (net/close! before-socket)
+        before (if (windows?)
+                 (whc/current!)
+                 (let [s (net/listen (net/endpoint "127.0.0.1" 0))
+                       fd (net/native-handle s)]
+                   (net/close! s)
+                   fd))
         threw (atom 0)]
     (dotimes [_ attempts]
       (try
@@ -386,27 +390,47 @@
     ;; so the handle comparison would be measuring nothing.
     (c/check "every rejected initiation failed before ownership transferred"
              attempts @threw)
-    (let [after-socket (net/listen (net/endpoint "127.0.0.1" 0))
-          after (net/native-handle after-socket)
-          delta (abs (- after before))
-          ;; POSIX allocates the lowest free fd, so a leak shows up almost
-          ;; immediately and the allowance can be tight.
-          ;;
-          ;; Windows does NOT densely reuse handle values the way POSIX reuses
-          ;; fds: kernel handle values advance in steps of 4 and wander with
-          ;; unrelated activity in the process, so a tight threshold there is
-          ;; flaky rather than strict. The separation is still wide -- 50 leaked
-          ;; sockets would advance the space by roughly 4 * 50, while ambient
-          ;; runtime churn is tens -- so the allowance is scaled to the loop
-          ;; instead of being borrowed from the POSIX fd model.
-          allowance (if (windows?) (* 2 attempts) 10)]
-      (try
+    (if (windows?)
+      (let [after (whc/current!)
+            signed-delta (- after before)
+            leak-signal attempts
+            leak-floor (quot leak-signal 2)
+            noise-budget 10
+            calibration-before (whc/current!)
+            sockets (atom [])]
+        ;; A guard on the measurement itself: prove that this runtime's process
+        ;; count observes SOCKET handles. Without it, a constant or wrong-process
+        ;; counter could make every leak assertion pass.
+        (try
+          (dotimes [_ 6]
+            (swap! sockets conj
+                   (net/listen (net/endpoint "127.0.0.1" 0))))
+          (c/check-pred
+           "GetProcessHandleCount observes deliberately open sockets"
+           #(<= 6 %) (- (whc/current!) calibration-before))
+          (finally
+            (doseq [s @sockets] (net/close! s))))
         (c/check-pred
-         (str attempts " failed initiations leak no descriptors (before "
-              before ", after " after ", delta " delta ", allowance "
-              allowance ")")
-         #(< % allowance) delta)
-        (finally (net/close! after-socket))))))
+         (str attempts " failed initiations leak no handles (before "
+              before ", after " after ", signed delta " signed-delta
+              ", a complete leak would add " leak-signal
+              ", refusing at " leak-floor ")")
+         #(< % leak-floor) signed-delta)
+        (c/check-pred
+         (str "the W2 handle-count oracle separates its noise budget "
+              noise-budget " from leak floor " leak-floor)
+         #(< noise-budget %) leak-floor))
+      ;; POSIX allocates the lowest free fd, so a leak shows up immediately and
+      ;; the original tight allocator-position check remains the stronger test.
+      (let [after-socket (net/listen (net/endpoint "127.0.0.1" 0))
+            after (net/native-handle after-socket)
+            delta (abs (- after before))]
+        (try
+          (c/check-pred
+           (str attempts " failed initiations leak no descriptors (before "
+                before ", after " after ", delta " delta ", allowance 10)")
+           #(< % 10) delta)
+          (finally (net/close! after-socket)))))))
 
 ;; --- entry point -------------------------------------------------------------
 (defn- run-suite! []

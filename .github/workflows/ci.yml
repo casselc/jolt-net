@@ -29,7 +29,7 @@
 # The Windows ARM64 lanes carry one extra obligation the others do not. This
 # runner image ships an x86_64 MinGW gcc, and Windows-on-ARM executes x64
 # binaries under emulation, so a job that merely "ran on an ARM runner" can
-# produce entirely x86-64 evidence. Six independent architecture witnesses must
+# produce entirely x86-64 evidence. Six architecture witnesses must
 # therefore agree before a socket is opened: the runner label, the selected MSVC
 # target, the compiled probe's PE machine type, scheme.exe's PE machine type,
 # Chez's own (machine-type), and jolt.host/target as jolt-net's selector sees
