@@ -27,11 +27,20 @@
   The jolt-net checkout under test. Defaults to this script's own repo root.
 
 .PARAMETER RuntimePath
-  The proposal Jolt runtime worktree providing host\chez\cli.ss. Task W4 is
-  pinned to the -w3 worktree, whose core revision is 85f645aa.
+  The proposal Jolt runtime worktree providing host\chez\cli.ss. CI supplies the
+  checkout of the pinned proposal core; see .github/workflows/ci.yml for the
+  exact revision.
 
 .PARAMETER ChezExe
   Path to scheme.exe.
+
+.PARAMETER ShellExe
+  The POSIX `sh` the Jolt runtime shells out to. These dependency-free aliases
+  resolve no Git dependency, so nothing here should reach it -- but the runtime
+  reads JOLT_SH while starting, and the Git-for-Windows location is not the same
+  on every image (notably the ARM64 runner). Parameterized rather than hardcoded
+  so a lane can pass the path it actually verified, instead of silently handing
+  the runtime a path that does not exist.
 
 .PARAMETER TimeoutSeconds
   Outer process timeout. The Jolt test main has its own shorter watchdog; this
@@ -43,6 +52,7 @@ param(
   [string]$JoltNetPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
   [string]$RuntimePath = "D:\src\jolt-proposal-net-runtime-w3",
   [string]$ChezExe = "D:\chez-10.4.1\bin\scheme.exe",
+  [string]$ShellExe = "C:\Program Files\Git\bin\sh.exe",
   [int]$TimeoutSeconds = 300
 )
 
@@ -64,12 +74,13 @@ $env:JOLT_PWD = $JoltNetPath
 # mode a green gate must not be able to have.
 $env:JOLT_AOT_CACHE = "0"
 $env:JOLT_VERSION = "dev"
-$env:JOLT_SH = "C:\Program Files\Git\bin\sh.exe"
+$env:JOLT_SH = $ShellExe
 
 Write-Host "jolt-net public poller wake suite (task W4)"
 Write-Host "  JOLT_PWD      = $env:JOLT_PWD"
 Write-Host "  runtime       = $RuntimePath"
 Write-Host "  scheme.exe    = $ChezExe"
+Write-Host "  sh.exe        = $env:JOLT_SH"
 Write-Host "  timeout       = $TimeoutSeconds seconds"
 Write-Host ""
 

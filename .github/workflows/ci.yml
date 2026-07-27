@@ -12,21 +12,29 @@
 #           means checking out an exact casselc/jolt revision and building a
 #           matching Chez Scheme.
 #
-# Windows x86_64 has four native socket-runtime gates: W1 blocking sockets, W2
-# FIONBIO/byte I/O/connect completion, W3 real WSAPoll readiness, and W4 the
-# PUBLIC jolt.net/open-poller over an owner-independent wake transport plus
-# readiness-driven blocking accept. All four deliberately exclude the
-# alias-scoped Hegel dependency, so a socket-runtime result can never be
-# confused with a dependency-resolution result and no property-test artifact
-# download can erase runtime coverage.
+# Both Windows architectures have four native socket-runtime gates: W1 blocking
+# sockets, W2 FIONBIO/byte I/O/connect completion, W3 real WSAPoll readiness,
+# and W4 the PUBLIC jolt.net/open-poller over an owner-independent wake
+# transport plus readiness-driven blocking accept. All of them deliberately
+# exclude the alias-scoped Hegel dependency, so a socket-runtime result can
+# never be confused with a dependency-resolution result and no property-test
+# artifact download can erase runtime coverage. The two lanes run the SAME four
+# PowerShell scripts with the same timeouts; only the Chez, runtime, and sh
+# paths differ.
 #
 # ABI probing is NOT socket evidence and is kept in separate jobs. A table
 # check, a cross-build, a namespace load, or a source-mode selection check says
-# nothing about whether a socket was opened. The ARM64 preview compiles and runs
-# the ABI probe with native MSVC and opens no socket; until that artifact is
-# reviewed into a committed descriptor and these same suites genuinely run
-# there, source Jolt must identify the host and jolt-net must fail closed.
-# ARM64 is therefore not promoted here. docs/PLATFORM-COVERAGE.md says the same.
+# nothing about whether a socket was opened.
+#
+# The Windows ARM64 lanes carry one extra obligation the others do not. This
+# runner image ships an x86_64 MinGW gcc, and Windows-on-ARM executes x64
+# binaries under emulation, so a job that merely "ran on an ARM runner" can
+# produce entirely x86-64 evidence. Six independent architecture witnesses must
+# therefore agree before a socket is opened: the runner label, the selected MSVC
+# target, the compiled probe's PE machine type, scheme.exe's PE machine type,
+# Chez's own (machine-type), and jolt.host/target as jolt-net's selector sees
+# it. docs/PLATFORM-COVERAGE.md records what each level of evidence does and
+# does not claim.
 
 name: ci
 
@@ -73,7 +81,7 @@ jobs:
             # exact declared signature, so the symbol has to resolve at link
             # time even though the probe opens no socket. Winsock lives in
             # ws2_32 rather than the default libc set, so MinGW needs it named
-            # explicitly. The ARM64 preview links the MSVC equivalent for the
+            # explicitly. The ARM64 lanes link the MSVC equivalent for the
             # same reason. No other target has a Winsock dependency, so this key
             # is absent for them and expands to nothing.
             probe_libs: -lws2_32
@@ -118,12 +126,65 @@ jobs:
           # file copied by a Linux runner against Darwin's real probe.
           path: ${{ env.PROBE_FILE }}
 
+  # Windows ARM64 cannot join the matrix above: that job finds a `cc` on PATH and
+  # runs it under bash, and on this runner the `cc` it would find is an x86_64
+  # MinGW gcc that executes under emulation -- producing an x86_64 probe on an
+  # ARM64 host. The toolchain therefore has to be selected explicitly, and the
+  # OUTPUT BINARY's PE machine type checked, rather than trusting the runner
+  # label. This job is small and deliberately separate from the ARM64 socket
+  # gate: drift detection must not depend on a heavyweight runtime lane, and the
+  # runtime lane re-probes independently for its own evidence.
+  probe-windows-arm64:
+    name: probe ABI (Windows aarch64)
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert the runner is ARM64
+        shell: pwsh
+        run: |
+          Write-Host "runner.arch      = ${{ runner.arch }}"
+          Write-Host "PROCESSOR_ARCH   = $env:PROCESSOR_ARCHITECTURE"
+          if ('${{ runner.arch }}' -ne 'ARM64') {
+            throw "expected an ARM64 runner, got '${{ runner.arch }}'"
+          }
+
+      - name: Compile the ABI probe with the native ARM64 MSVC toolchain
+        shell: cmd
+        run: |
+          call "%GITHUB_WORKSPACE%\tools\msvc-arm64-env.bat" || exit /b 1
+          rem ws2_32.lib is required because the probe takes the address of
+          rem WSAPoll to pin that function's exact declared signature, so the
+          rem symbol has to resolve. The probe still opens no socket.
+          cl /nologo /W4 /Od /Fe:"%GITHUB_WORKSPACE%\probe-windows-aarch64.exe" "%GITHUB_WORKSPACE%\tools\probe-constants.c" /link ws2_32.lib || exit /b 1
+          call "%GITHUB_WORKSPACE%\tools\assert-arm64-image.bat" "%GITHUB_WORKSPACE%\probe-windows-aarch64.exe" || exit /b 1
+
+      - name: Run the probe and compare it byte-for-byte with the committed facts
+        shell: pwsh
+        run: |
+          ./tools/Probe-WindowsArm64.ps1 `
+            -ProbeExe "$env:GITHUB_WORKSPACE\probe-windows-aarch64.exe" `
+            -OutFile  "$env:GITHUB_WORKSPACE\probed-arm64\windows-aarch64.edn" `
+            -Committed "$env:GITHUB_WORKSPACE\tools\probed\windows-aarch64.edn"
+
+      # Named to match the `abi-probe-*` pattern the drift job downloads, so the
+      # ARM64 column is regenerated and diffed on every run exactly like the
+      # other five, rather than living in a preview lane nothing gates on.
+      - name: Upload probed ABI facts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: abi-probe-windows-aarch64
+          path: probed-arm64/windows-aarch64.edn
+          if-no-files-found: error
+
   # Fail if any committed descriptor disagrees with what that platform's headers
   # actually say. A drift here is not cosmetic -- a wrong struct offset is memory
   # corruption -- so this gates rather than warns.
   tables:
     name: tables match probed headers
-    needs: probe
+    needs: [probe, probe-windows-arm64]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -527,19 +588,37 @@ jobs:
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-  # Public-preview evidence lane. The runner image also contains an x86_64
-  # MinGW gcc that can execute under emulation; using it here would silently
-  # produce an x86_64 probe on an ARM64 host. Build Chez and the ABI probe with
-  # the native MSVC ARM64 target instead. The generated descriptor is uploaded
-  # for review and is deliberately not copied into the source table.
-  windows-arm64-source-preview:
-    name: source-mode ABI preview (Windows aarch64; non-AOT, no sockets)
+  # Task W7. The Windows ARM64 socket-runtime gate: the same four suites the
+  # x86-64 lane runs, on real loopback sockets, in a native ARM64 process.
+  #
+  # This lane replaces a non-gating preview, and the thing that made the preview
+  # necessary is still true: the runner image carries an x86_64 MinGW gcc and
+  # Windows-on-ARM runs x64 binaries under emulation, so "it ran on an ARM
+  # runner" is not evidence that ARM64 code did the work. The job therefore
+  # requires six independent statements of architecture to agree -- the runner
+  # label, the selected MSVC target, the compiled probe's PE machine type,
+  # scheme.exe's PE machine type, Chez's own (machine-type), and jolt.host/target
+  # as seen by jolt-net's selector -- before any socket is opened.
+  #
+  # Source mode, AOT cache off, no jolt-hegel alias, no artifact download in the
+  # socket path, and every gate must observe a real child exit code.
+  windows-arm64:
+    name: Winsock W1/W2/W3/W4 runtime gate (Windows aarch64)
     runs-on: windows-11-vs2026-arm
-    timeout-minutes: 35
-    continue-on-error: true
+    timeout-minutes: 60
     steps:
       - name: Checkout jolt-net
         uses: actions/checkout@v4
+
+      - name: Assert the runner is ARM64
+        shell: pwsh
+        run: |
+          Write-Host "runner.arch      = ${{ runner.arch }}"
+          Write-Host "PROCESSOR_ARCH   = $env:PROCESSOR_ARCHITECTURE"
+          Write-Host "OS architecture  = $((Get-CimInstance Win32_OperatingSystem).OSArchitecture)"
+          if ('${{ runner.arch }}' -ne 'ARM64') {
+            throw "expected an ARM64 runner, got '${{ runner.arch }}'"
+          }
 
       - name: Checkout official Chez Scheme v10.4.1
         uses: actions/checkout@v4
@@ -550,30 +629,75 @@ jobs:
           persist-credentials: false
           path: chez-arm64
 
+      # Only the build OUTPUT is cached, not the checkout: build.bat writes
+      # everything under the machine-type directory, so restoring that alone
+      # cannot resurrect a stale source tree under a fresh tag.
+      - name: Cache native ARM64 Chez Scheme
+        id: cache-chez-arm64
+        uses: actions/cache@v4
+        with:
+          path: chez-arm64/tarm64nt
+          key: chez-windows-tarm64nt-v10.4.1-msvc-v1
+
       - name: Build native ARM64 Chez Scheme from source
+        if: steps.cache-chez-arm64.outputs.cache-hit != 'true'
         shell: cmd
         run: |
           cd /d "%GITHUB_WORKSPACE%\chez-arm64"
-          call build.bat tarm64nt /only
+          call build.bat tarm64nt /only || exit /b 1
 
-      - name: Compile and run the ABI probe with native ARM64 MSVC
+      - name: Compile the ABI probe with the native ARM64 MSVC toolchain
         shell: cmd
         run: |
-          call "%GITHUB_WORKSPACE%\chez-arm64\c\vs.bat" x64_arm64
-          rem ws2_32.lib is required because the probe takes the address of
-          rem WSAPoll to pin that function's exact declared signature, so the
-          rem symbol has to resolve. The probe still opens no socket.
-          cl /nologo /W4 /Od /Fe:"%GITHUB_WORKSPACE%\probe-windows-aarch64.exe" "%GITHUB_WORKSPACE%\tools\probe-constants.c" /link ws2_32.lib
-          "%GITHUB_WORKSPACE%\probe-windows-aarch64.exe" > "%GITHUB_WORKSPACE%\tools\probed\windows-aarch64.edn"
-          type "%GITHUB_WORKSPACE%\tools\probed\windows-aarch64.edn"
-          findstr /C:":arch :aarch64" "%GITHUB_WORKSPACE%\tools\probed\windows-aarch64.edn" >NUL
+          call "%GITHUB_WORKSPACE%\tools\msvc-arm64-env.bat" || exit /b 1
+          cl /nologo /W4 /Od /Fe:"%GITHUB_WORKSPACE%\probe-windows-aarch64.exe" "%GITHUB_WORKSPACE%\tools\probe-constants.c" /link ws2_32.lib || exit /b 1
+          rem Witness 3: the probe binary really is ARM64.
+          call "%GITHUB_WORKSPACE%\tools\assert-arm64-image.bat" "%GITHUB_WORKSPACE%\probe-windows-aarch64.exe" || exit /b 1
+          rem Witness 4: so is the Chez that is about to run every socket suite.
+          call "%GITHUB_WORKSPACE%\tools\assert-arm64-image.bat" "%GITHUB_WORKSPACE%\chez-arm64\tarm64nt\bin\tarm64nt\scheme.exe" || exit /b 1
 
-      - name: Upload native Windows ARM64 ABI evidence
+      # An independent re-probe on the runtime runner, byte-compared with the
+      # committed descriptor. The drift job does the same from its own smaller
+      # lane; doing it here too means the machine that opens the sockets has
+      # itself confirmed the facts those sockets are marshalled with.
+      - name: Re-probe and byte-compare the committed ARM64 descriptor
+        shell: pwsh
+        run: |
+          ./tools/Probe-WindowsArm64.ps1 `
+            -ProbeExe "$env:GITHUB_WORKSPACE\probe-windows-aarch64.exe" `
+            -OutFile  "$env:GITHUB_WORKSPACE\probed-arm64-runtime\windows-aarch64.edn" `
+            -Committed "$env:GITHUB_WORKSPACE\tools\probed\windows-aarch64.edn"
+
+      - name: Upload native Windows ARM64 runtime-lane ABI evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: probed-windows-aarch64-preview
-          path: tools/probed/windows-aarch64.edn
+          name: probed-runtime-windows-aarch64
+          path: probed-arm64-runtime/windows-aarch64.edn
           if-no-files-found: error
+
+      - name: Assert native ARM64 Chez v10.4.1
+        shell: pwsh
+        run: |
+          $scheme = Join-Path $env:GITHUB_WORKSPACE 'chez-arm64\tarm64nt\bin\tarm64nt\scheme.exe'
+          if (-not (Test-Path $scheme)) {
+            throw "native ARM64 Chez executable not found: $scheme"
+          }
+          $version = (& $scheme --version 2>&1 | Out-String)
+          if ($LASTEXITCODE -ne 0) { throw "scheme.exe --version exited $LASTEXITCODE" }
+          Write-Host "chez version: $version"
+          if (-not $version.Contains('10.4.1')) {
+            throw "expected Chez Scheme 10.4.1, got: $version"
+          }
+          # Witness 5: Chez's own machine type. ta6nt here would mean an
+          # emulated x86-64 build slipped in; tarm64nt is the only pass.
+          $machine = (& $scheme --quiet --eval '(begin (display (machine-type)) (newline) (exit))' | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "scheme.exe --eval exited $LASTEXITCODE" }
+          Write-Host "chez machine-type: $machine"
+          if ($machine -ne 'tarm64nt') {
+            throw "expected Chez machine-type tarm64nt, got '$machine'"
+          }
+          echo "JOLT_NET_CHEZ=$scheme" >> $env:GITHUB_ENV
 
       - name: Checkout the pinned Jolt fork
         uses: actions/checkout@v4
@@ -583,45 +707,109 @@ jobs:
           submodules: recursive
           path: jolt-upstream
 
-      - name: Assert native Chez for source-mode Jolt
+      # The dependency-free aliases resolve no Git dependency, so nothing in the
+      # socket path should reach `sh`. The runtime still reads JOLT_SH while
+      # starting, and Git for Windows is not at an identical path on every
+      # image, so resolve it here and pass what was actually found rather than
+      # handing the runtime a path that may not exist.
+      - name: Locate the runner's sh.exe
         shell: pwsh
         run: |
-          $scheme = Join-Path $env:GITHUB_WORKSPACE `
-            'chez-arm64\tarm64nt\bin\tarm64nt\scheme.exe'
-          if (-not (Test-Path $scheme)) {
-            throw "native ARM64 Chez executable not found: $scheme"
+          $candidates = @(
+            "$env:ProgramFiles\Git\bin\sh.exe",
+            "${env:ProgramFiles(x86)}\Git\bin\sh.exe",
+            "C:\Program Files\Git\bin\sh.exe"
+          ) | Where-Object { $_ -and (Test-Path $_) }
+          $sh = if ($candidates) { $candidates[0] } else { (Get-Command sh -ErrorAction SilentlyContinue).Source }
+          if (-not $sh) {
+            throw "no sh.exe found on this runner; JOLT_SH would point at nothing"
           }
-          $version = (& $scheme --version | Out-String)
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Write-Host $version
-          if (-not $version.Contains('10.4.1')) {
-            throw "expected Chez Scheme 10.4.1, got: $version"
-          }
+          Write-Host "sh.exe = $sh"
+          echo "JOLT_NET_SH=$sh" >> $env:GITHUB_ENV
 
-      # No Windows/aarch64 descriptor is committed yet. Loading jolt.net.ffi
-      # before reviewing the uploaded probe would require guessed layouts, so
-      # this source-mode preview exercises the production target selector and
-      # requires the current unsupported target to fail closed.
-      - name: Verify native target and fail-closed descriptor selection
+      # Witness 6: source Jolt and jolt-net's own selector agree, the committed
+      # descriptor records :probed provenance, and it matches this machine's
+      # freshly probed headers field by field. Opens no socket; the four gates
+      # below are the socket evidence.
+      - name: Verify native target and descriptor selection
         shell: pwsh
         env:
           JOLT_PWD: ${{ github.workspace }}
           JOLT_AOT_CACHE: 0
-          JOLT_SH: 'C:/Program Files/Git/bin/sh.exe'
         run: |
-          $scheme = Join-Path $env:GITHUB_WORKSPACE `
-            'chez-arm64\tarm64nt\bin\tarm64nt\scheme.exe'
+          $env:JOLT_SH = $env:JOLT_NET_SH
           $runtime = Join-Path $env:GITHUB_WORKSPACE 'jolt-upstream'
-          $script = Join-Path $env:GITHUB_WORKSPACE `
-            'test\jolt\net\windows_arm64_preview.clj'
-          if (-not (Test-Path $scheme)) {
-            throw "native ARM64 Chez executable not found: $scheme"
-          }
+          $script = Join-Path $env:GITHUB_WORKSPACE 'test\jolt\net\windows_arm64_runtime.clj'
           Push-Location $runtime
           try {
-            & $scheme --script host\chez\cli.ss run $script
+            & $env:JOLT_NET_CHEZ --script host\chez\cli.ss run $script
+            if (-not (Test-Path variable:LASTEXITCODE) -or $null -eq $LASTEXITCODE) {
+              throw "target verification: no child exit code was observed; refusing to report success"
+            }
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           finally {
             Pop-Location
           }
+
+      # The four socket gates. These are the SAME scripts the x86-64 lane runs,
+      # with the same timeouts and the same semantics -- only the Chez, runtime,
+      # and sh paths differ, which is what those parameters are for. Forking them
+      # into ARM-specific copies would mean the two lanes could drift apart while
+      # both stayed green, and no platform difference was found that would
+      # justify it.
+      - name: Run dependency-free native blocking socket suite
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\test-windows-blocking.ps1" `
+            -JoltNetPath "$env:GITHUB_WORKSPACE" `
+            -RuntimePath "$env:GITHUB_WORKSPACE\jolt-upstream" `
+            -ChezExe "$env:JOLT_NET_CHEZ" `
+            -ShellExe "$env:JOLT_NET_SH" `
+            -TimeoutSeconds 90
+          if (-not (Test-Path variable:LASTEXITCODE) -or $null -eq $LASTEXITCODE) {
+            throw "W1 blocking socket gate: no child exit code was observed; refusing to report success"
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run dependency-free native non-blocking socket suite
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\test-windows-nonblocking.ps1" `
+            -JoltNetPath "$env:GITHUB_WORKSPACE" `
+            -RuntimePath "$env:GITHUB_WORKSPACE\jolt-upstream" `
+            -ChezExe "$env:JOLT_NET_CHEZ" `
+            -ShellExe "$env:JOLT_NET_SH" `
+            -TimeoutSeconds 90
+          if (-not (Test-Path variable:LASTEXITCODE) -or $null -eq $LASTEXITCODE) {
+            throw "W2 non-blocking socket gate: no child exit code was observed; refusing to report success"
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run dependency-free native WSAPoll readiness suite
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\test-windows-wsapoll.ps1" `
+            -JoltNetPath "$env:GITHUB_WORKSPACE" `
+            -RuntimePath "$env:GITHUB_WORKSPACE\jolt-upstream" `
+            -ChezExe "$env:JOLT_NET_CHEZ" `
+            -ShellExe "$env:JOLT_NET_SH" `
+            -TimeoutSeconds 240
+          if (-not (Test-Path variable:LASTEXITCODE) -or $null -eq $LASTEXITCODE) {
+            throw "W3 WSAPoll readiness gate: no child exit code was observed; refusing to report success"
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run dependency-free native public poller and wake suite
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\test-windows-poller-wake.ps1" `
+            -JoltNetPath "$env:GITHUB_WORKSPACE" `
+            -RuntimePath "$env:GITHUB_WORKSPACE\jolt-upstream" `
+            -ChezExe "$env:JOLT_NET_CHEZ" `
+            -ShellExe "$env:JOLT_NET_SH" `
+            -TimeoutSeconds 300
+          if (-not (Test-Path variable:LASTEXITCODE) -or $null -eq $LASTEXITCODE) {
+            throw "W4 public poller and wake gate: no child exit code was observed; refusing to report success"
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -5,12 +5,15 @@
  * this prints what the headers actually say, so a drift between table and
  * reality is a test failure rather than a memory-corruption bug months later.
  *
- * Windows builds must also RUN on the target. CI uses native MSVC for ARM64;
- * the earlier x86_64 evidence also ran its MinGW build on Windows. Either way,
- * the Windows column is genuinely probed rather than guessed.
+ * Windows builds must also RUN on the target. CI uses native MSVC for ARM64
+ * and MinGW for x86_64, and executes both on Windows. Either way, each Windows
+ * column is genuinely probed rather than guessed, and neither is copied from
+ * the other -- the two files are produced by separate compilers on separate
+ * machines and compared only afterwards.
  *
  * POSIX and Windows x86_64 use tools/probe-constants.sh. The native Windows
- * ARM64 preview compiles and runs this source directly with MSVC.
+ * ARM64 lanes compile this source directly with MSVC and check the resulting
+ * binary's PE machine type before trusting its output.
  */
 #ifndef _WIN32
 #  ifdef __APPLE__

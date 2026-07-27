@@ -147,6 +147,14 @@
   (c/section "target: descriptors vs probed platform headers")
   (check-against-probe "linux/x86-64" [:linux :x86-64 64])
   (check-against-probe "windows/x86-64" [:windows :x86-64 64])
+  ;; Windows/aarch64 is compared against its OWN probe file, executed on a
+  ;; native ARM64 runner. Running this comparison from any host is sound because
+  ;; both sides are pure data; it is not, and is never reported as, evidence
+  ;; that a socket was opened on ARM64. That is what the W1-W4 ARM64 gate is for.
+  (if (read-probe "windows" "aarch64")
+    (check-against-probe "windows/aarch64" [:windows :aarch64 64])
+    (c/skip "windows/aarch64 vs probed headers"
+            "tools/probed/windows-aarch64.edn missing; run the ARM64 CI probe"))
 
   ;; Make the macOS gap explicit rather than silent. If someone probes a Mac and
   ;; commits the file, this flips from SKIP to a real comparison automatically.
@@ -164,4 +172,24 @@
             "tools/probed/darwin-aarch64.edn missing; run CI or probe on a Mac"))
   (c/check "linux/aarch64 records that it is inferred, not probed"
            :inferred-from-linux-x86-64
-           (:evidence (t/descriptor {:os :linux :arch :aarch64 :pointer-bits 64}))))
+           (:evidence (t/descriptor {:os :linux :arch :aarch64 :pointer-bits 64})))
+
+  ;; Windows/aarch64 is the one same-ABI alias in this table whose evidence label
+  ;; is :probed rather than :inferred-*. Assert that difference explicitly, so
+  ;; the label cannot drift into matching the Linux/Darwin aliases by tidiness.
+  (c/check "windows/aarch64 records that it was probed, not inferred"
+           :probed
+           (:evidence (t/descriptor {:os :windows :arch :aarch64 :pointer-bits 64})))
+  ;; The equality between the two Windows columns is a claim; check it here as
+  ;; data as well as byte-for-byte in CI, so a future edit to one column that
+  ;; forgets the other is a failure rather than a silent divergence.
+  (c/check "the two Windows columns carry identical ABI facts"
+           (t/descriptor {:os :windows :arch :x86-64 :pointer-bits 64})
+           (t/descriptor {:os :windows :arch :aarch64 :pointer-bits 64}))
+  (c/check-pred "windows/aarch64 is a supported target"
+                true? (t/supported-target? {:os :windows :arch :aarch64 :pointer-bits 64}))
+  ;; Adding one arch must not have widened the family. A 32-bit ARM Windows host
+  ;; still has no probed layouts, so it must still fail closed.
+  (c/check-throws "32-bit ARM Windows is still not silently given 64-bit layouts"
+                  {:jolt.net/kind :unsupported-target}
+                  #(t/descriptor {:os :windows :arch :arm :pointer-bits 32})))

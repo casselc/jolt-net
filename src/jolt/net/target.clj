@@ -157,6 +157,29 @@
    :gai {:noname 11001 :again 11002 :fail 11003 :family 10047 :service 10109
          :memory 8 :system nil :addrfamily nil}})
 
+;; --- Windows aarch64 ----------------------------------------------------------
+;; :evidence :probed -- tools/probed/windows-aarch64.edn, produced by compiling
+;; tools/probe-constants.c with the NATIVE ARM64 MSVC toolchain and EXECUTING the
+;; resulting ARM64 binary on a windows-11-vs2026-arm runner. The same runner then
+;; runs the W1/W2/W3/W4 Winsock suites against real loopback sockets.
+;;
+;; Every fact below is byte-for-byte equal to the Windows x86-64 column, and the
+;; table is shared to say so. That equality is a RECORDED OBSERVATION, not the
+;; reason this entry exists and not a licence to have copied it: Win64 ARM64 and
+;; Win64 x64 are both LLP64 with the same Winsock SDK, so equality is expected --
+;; but "expected" is what the probe is for. The entry was added only after a
+;; native ARM64 probe produced these numbers, and CI keeps that honest two ways:
+;; the tables job byte-compares a freshly regenerated windows-aarch64.edn against
+;; the committed one, and the ARM64 runtime job additionally diffs it against
+;; windows-x86-64.edn after normalizing only the :arch label, so the equality
+;; claim itself is gated rather than asserted.
+;;
+;; :evidence therefore stays :probed. It is deliberately NOT
+;; :inferred-from-windows-x86-64 -- nothing here was inferred, and labelling
+;; independently probed facts as inferred would understate the evidence exactly
+;; as badly as the reverse would overstate it.
+(def ^:private windows-aarch64 windows-x86-64)
+
 ;; --- macOS ------------------------------------------------------------------
 ;; :evidence :probed -- tools/probed/darwin-aarch64.edn, produced by compiling
 ;; and running tools/probe-constants.c on a macOS arm64 CI runner.
@@ -221,6 +244,10 @@
    ;; the point of failing closed is that no target is matched by accident.
    [:linux :aarch64 64] (assoc linux-x86-64 :evidence :inferred-from-linux-x86-64)
    [:windows :x86-64 64] windows-x86-64
+   ;; Independently probed on a native ARM64 Windows runner and found equal to
+   ;; the x86-64 column; see the windows-aarch64 comment above for why that is
+   ;; recorded as :probed rather than inferred.
+   [:windows :aarch64 64] windows-aarch64
    [:darwin :aarch64 64] darwin
    ;; Keep the public evidence label honest until the new native Intel jobs have
    ;; run green and their probe artifact has been reviewed into the baseline.

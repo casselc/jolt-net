@@ -31,6 +31,14 @@
 .PARAMETER ChezExe
   Path to scheme.exe.
 
+.PARAMETER ShellExe
+  The POSIX `sh` the Jolt runtime shells out to. These dependency-free aliases
+  resolve no Git dependency, so nothing here should reach it -- but the runtime
+  reads JOLT_SH while starting, and the Git-for-Windows location is not the same
+  on every image (notably the ARM64 runner). Parameterized rather than hardcoded
+  so a lane can pass the path it actually verified, instead of silently handing
+  the runtime a path that does not exist.
+
 .PARAMETER TimeoutSeconds
   Outer process timeout. The Jolt test main has its own shorter watchdog; this
   one also bounds failures occurring before that main starts. A refused loopback
@@ -41,6 +49,7 @@ param(
   [string]$JoltNetPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
   [string]$RuntimePath = "D:\src\jolt-proposal-net-runtime",
   [string]$ChezExe = "D:\chez-10.4.1\bin\scheme.exe",
+  [string]$ShellExe = "C:\Program Files\Git\bin\sh.exe",
   [int]$TimeoutSeconds = 180
 )
 
@@ -59,12 +68,13 @@ if ($TimeoutSeconds -le 0) {
 $env:JOLT_PWD = $JoltNetPath
 $env:JOLT_AOT_CACHE = "0"
 $env:JOLT_VERSION = "dev"
-$env:JOLT_SH = "C:\Program Files\Git\bin\sh.exe"
+$env:JOLT_SH = $ShellExe
 
 Write-Host "jolt-net WSAPoll readiness suite (task W3)"
 Write-Host "  JOLT_PWD      = $env:JOLT_PWD"
 Write-Host "  runtime       = $RuntimePath"
 Write-Host "  scheme.exe    = $ChezExe"
+Write-Host "  sh.exe        = $env:JOLT_SH"
 Write-Host "  timeout       = $TimeoutSeconds seconds"
 Write-Host ""
 
