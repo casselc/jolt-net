@@ -208,7 +208,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: casselc/jolt
-          ref: 85f645aa1178e4b631198dcbaf46bdad1283750b
+          ref: 89fe46e8a826b60b69d264fab76c864881055830
           submodules: recursive
           path: jolt-upstream
 
@@ -455,7 +455,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: casselc/jolt
-          ref: 85f645aa1178e4b631198dcbaf46bdad1283750b
+          ref: 89fe46e8a826b60b69d264fab76c864881055830
           submodules: recursive
           path: jolt-upstream
 
@@ -579,7 +579,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: casselc/jolt
-          ref: 85f645aa1178e4b631198dcbaf46bdad1283750b
+          ref: 89fe46e8a826b60b69d264fab76c864881055830
           submodules: recursive
           path: jolt-upstream
 

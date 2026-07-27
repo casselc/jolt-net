@@ -1,9 +1,10 @@
 #!/bin/sh
 # jnc — run jolt-net against the local jolt fork.
 #
-# jolt-net cannot be built by the released joltc: it needs the fork's target,
+# jolt-net cannot be built by upstream Jolt v0.5.4: it needs the fork's target,
 # clock, atomic native-error, 16-bit-type, and scoped array-slice primitives.
-# A bare `joltc` on PATH would fail with an unbound-var error far from the cause,
+# A bare upstream `jolt` on PATH would fail with an unbound-var error far from
+# the cause,
 # so this wrapper pins the fork and says so plainly if it is missing.
 #
 #   bin/jnc -M:test              run the test suite
@@ -17,42 +18,50 @@ set -eu
 # rather than silently falling back to a different runtime, which would make the
 # override look like it worked.
 if [ -n "${JOLT_UPSTREAM:-}" ]; then
-    if [ ! -x "$JOLT_UPSTREAM/bin/joltc" ]; then
-        echo "jnc: JOLT_UPSTREAM=$JOLT_UPSTREAM has no bin/joltc" >&2
+    if [ -x "$JOLT_UPSTREAM/bin/jolt" ]; then
+        JOLT_BIN="$JOLT_UPSTREAM/bin/jolt"
+    elif [ -x "$JOLT_UPSTREAM/bin/joltc" ]; then
+        JOLT_BIN="$JOLT_UPSTREAM/bin/joltc"
+    else
+        echo "jnc: JOLT_UPSTREAM=$JOLT_UPSTREAM has no bin/jolt (or legacy bin/joltc)" >&2
         exit 1
     fi
 else
     # Otherwise search: the dedicated worktree, then a sibling checkout. The
-    # branch carrying the required primitives is codex/upstream-improvements-6-8;
-    # a plain checkout works if it is on that branch.
+    # first worktree is the current upstream-v0.5.4 rebase of the proposal.
     for candidate in \
+        /home/chuck/ai-src/worktrees/jolt-upstream-rebase-2026-07-26 \
         /home/chuck/ai-src/worktrees/jolt-upstream-6-8 \
         /home/chuck/ai-src/jolt-upstream \
         "$(dirname -- "$0")/../../jolt-upstream"
     do
-        if [ -x "$candidate/bin/joltc" ]; then
+        if [ -x "$candidate/bin/jolt" ]; then
             JOLT_UPSTREAM="$candidate"
+            JOLT_BIN="$candidate/bin/jolt"
+            break
+        elif [ -x "$candidate/bin/joltc" ]; then
+            JOLT_UPSTREAM="$candidate"
+            JOLT_BIN="$candidate/bin/joltc"
             break
         fi
     done
 fi
 
-JOLTC="${JOLT_UPSTREAM:-}/bin/joltc"
-
-if [ ! -x "$JOLTC" ]; then
-    echo "jnc: could not find a jolt fork checkout with bin/joltc." >&2
+if [ ! -x "${JOLT_BIN:-}" ]; then
+    echo "jnc: could not find a jolt fork checkout with bin/jolt." >&2
     echo "jnc: jolt-net requires the local fork's host/FFI primitives on branch" >&2
-    echo "     codex/upstream-improvements-6-8. The released joltc on PATH" >&2
+    echo "     codex/upstream-rebase-2026-07-26. Upstream Jolt v0.5.4" >&2
     echo "     cannot load this library. Set JOLT_UPSTREAM to the checkout." >&2
     echo "     See docs/UPSTREAM-NOTES.md." >&2
     exit 1
 fi
 
-# JOLT_PWD is how joltc finds THIS project's deps.edn: bin/joltc cd's to the jolt
+# JOLT_PWD is how Jolt finds THIS project's deps.edn: bin/jolt cd's to the jolt
 # repo root so the runtime's relative loads work, and reads the project dir here.
 export JOLT_PWD="${JOLT_PWD:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"
 # The AOT cache key can collide and silently run stale code across edits.
 export JOLT_AOT_CACHE="${JOLT_AOT_CACHE:-0}"
 export CHEZ="${CHEZ:-scheme}"
+export JOLT_CHEZ="${JOLT_CHEZ:-$CHEZ}"
 
-exec "$JOLTC" "$@"
+exec "$JOLT_BIN" "$@"
