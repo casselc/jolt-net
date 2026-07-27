@@ -1,7 +1,7 @@
 #!/bin/sh
 # jnc — run jolt-net against the local jolt fork.
 #
-# jolt-net cannot be built by upstream Jolt v0.5.4: it needs the fork's target,
+# jolt-net cannot be built by upstream Jolt v0.5.7: it needs the fork's target,
 # clock, atomic native-error, 16-bit-type, and scoped array-slice primitives.
 # A bare upstream `jolt` on PATH would fail with an unbound-var error far from
 # the cause,
@@ -28,9 +28,9 @@ if [ -n "${JOLT_UPSTREAM:-}" ]; then
     fi
 else
     # Otherwise search: the dedicated worktree, then a sibling checkout. The
-    # first worktree is the current upstream-v0.5.4 rebase of the proposal.
+    # first worktree is the current upstream-v0.5.7 rebase of the proposal.
     for candidate in \
-        /home/chuck/ai-src/worktrees/jolt-upstream-rebase-2026-07-26 \
+        /home/chuck/ai-src/worktrees/jolt-upstream-rebase-v0.5.7 \
         /home/chuck/ai-src/worktrees/jolt-upstream-6-8 \
         /home/chuck/ai-src/jolt-upstream \
         "$(dirname -- "$0")/../../jolt-upstream"
@@ -50,7 +50,7 @@ fi
 if [ ! -x "${JOLT_BIN:-}" ]; then
     echo "jnc: could not find a jolt fork checkout with bin/jolt." >&2
     echo "jnc: jolt-net requires the local fork's host/FFI primitives on branch" >&2
-    echo "     codex/upstream-rebase-2026-07-26. Upstream Jolt v0.5.4" >&2
+    echo "     codex/upstream-rebase-v0.5.7. Upstream Jolt v0.5.7" >&2
     echo "     cannot load this library. Set JOLT_UPSTREAM to the checkout." >&2
     echo "     See docs/UPSTREAM-NOTES.md." >&2
     exit 1

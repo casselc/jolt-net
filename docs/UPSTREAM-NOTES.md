@@ -6,19 +6,25 @@ accepted design spike.
 
 ## Fork prerequisites
 
-jolt-net cannot load on upstream Jolt v0.5.4. It requires seven primitives
-retained on fork branch `codex/upstream-rebase-2026-07-26`, currently pinned at
-`89fe46e8a826b60b69d264fab76c864881055830`:
+jolt-net cannot load on upstream Jolt v0.5.7. It requires seven primitives
+retained on fork branch `codex/upstream-rebase-v0.5.7`, currently pinned at
+`46e1f74fc14f29283586900ef4b98c45375c0500`:
 
 | Primitive | Commit | Why jolt-net needs it |
 |---|---|---|
-| `jolt.host/target` | `914620af` | Select exact fail-closed ABI facts instead of inferring them from the build host. |
-| `jolt.host/monotonic-nanos`, `System/nanoTime` over a real monotonic clock | `3d02cb42` | Deadlines. The previous `nanoTime` was `currentTimeMillis * 1e6` — wall-clock and millisecond-truncated, so it could step backwards and could not resolve a sub-millisecond interval at all. |
-| `:int16` / `:uint16` / `:short` / `:ushort` foreign types | `2b6fb061` | `sockaddr_in.sin_family` and the `sockaddr_in6` fields are 16-bit. Without them the only option was the endian-dependent short-packing hack in `teensyp.ffi-net`. |
-| `jolt.ffi/errno` | `db13e951` | The whole error contract rests on reading the native error before any other native call. |
-| `jolt.ffi/with-byte-array-pointer` | `701c5ca5` | Pins a validated interior array slice for one callback, eliminating partial-I/O allocation and copying without exposing an unsafe retained pointer. |
-| `{:varargs-after n}` on `jolt.ffi/defcfn` | `339534c7` | Lowers an explicit fixed/variadic boundary to Chez. Apple arm64 passes `fcntl`'s third argument according to the variadic ABI even though its Jolt type is known. |
-| `{:capture-native-error true}` on `jolt.ffi/defcfn` | `ebca1d43`, corrected by `a99cc03d` | Returns `[result native-error]` from the foreign return boundary, before later runtime or native work can clobber POSIX `errno` or Windows last-error state. Every sentinel-returning operation whose error is consumed must use this pair rather than call `jolt.ffi/errno` afterward. |
+| `jolt.host/target` | `1af26e26` | Select exact fail-closed ABI facts instead of inferring them from the build host. |
+| `jolt.host/monotonic-nanos`, `System/nanoTime` over a real monotonic clock | `6f01c236` | Deadlines. The previous `nanoTime` was `currentTimeMillis * 1e6` — wall-clock and millisecond-truncated, so it could step backwards and could not resolve a sub-millisecond interval at all. |
+| `:int16` / `:uint16` / `:short` / `:ushort` foreign types | `437ed89d` | `sockaddr_in.sin_family` and the `sockaddr_in6` fields are 16-bit. Without them the only option was the endian-dependent short-packing hack in `teensyp.ffi-net`. |
+| `jolt.ffi/errno` | `31fe706c` | The whole error contract rests on reading the native error before any other native call. |
+| `jolt.ffi/with-byte-array-pointer` | `f8c91414` | Pins a validated interior array slice for one callback, eliminating partial-I/O allocation and copying without exposing an unsafe retained pointer. |
+| `{:varargs-after n}` on `jolt.ffi/defcfn` | `8f16fec2` | Lowers an explicit fixed/variadic boundary to Chez. Apple arm64 passes `fcntl`'s third argument according to the variadic ABI even though its Jolt type is known. |
+| `{:capture-native-error true}` on `jolt.ffi/defcfn` | `d0c58691`, corrected by `d973693d` | Returns `[result native-error]` from the foreign return boundary, before later runtime or native work can clobber POSIX `errno` or Windows last-error state. Every sentinel-returning operation whose error is consumed must use this pair rather than call `jolt.ffi/errno` afterward. |
+
+The pinned tip also carries `9f5acb54` / `46e1f74f`, which make the transactional
+Git dependency cache report the platform's own diagnostics instead of assuming a
+POSIX `sh` error string. That fix is what lets a native Windows ARM64 runner
+reach a readable failure rather than an opaque one, so it is part of this pin
+rather than an unrelated carry.
 
 These live in the proposed fork rather than inside jolt-net because each is a
 shared FFI/host platform concern. Nothing in this branch has been pushed to the
