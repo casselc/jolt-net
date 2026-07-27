@@ -691,8 +691,12 @@ jobs:
           }
           # Witness 5: Chez's own machine type. ta6nt here would mean an
           # emulated x86-64 build slipped in; tarm64nt is the only pass.
-          $machine = (& $scheme --quiet --eval '(begin (display (machine-type)) (newline) (exit))' | Out-String).Trim()
-          if ($LASTEXITCODE -ne 0) { throw "scheme.exe --eval exited $LASTEXITCODE" }
+          # Chez has no --eval flag -- it would try to LOAD "--eval" as a file --
+          # so ask through a one-line script, the same mechanism the suites use.
+          $probe = Join-Path $env:RUNNER_TEMP 'machine-type.ss'
+          Set-Content -Path $probe -Value '(display (machine-type))(newline)'
+          $machine = (& $scheme --script $probe | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "scheme.exe --script exited $LASTEXITCODE" }
           Write-Host "chez machine-type: $machine"
           if ($machine -ne 'tarm64nt') {
             throw "expected Chez machine-type tarm64nt, got '$machine'"
