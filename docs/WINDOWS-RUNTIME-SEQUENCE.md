@@ -776,7 +776,9 @@ wander with unrelated process activity, so the assertion carries a noise
 allowance of `2 * attempts` = 100 against a real-leak floor of roughly
 `4 * attempts` = 200. The observed 100 is ambient churn landing exactly on the
 allowance boundary, not a leak: a genuine leak of 50 sockets would have to show
-about 200, and the four preceding runs of the same code measured 0, 0, 8, and 4.
+about 200. The x86-64 lane measured 0, 0, and 8 on the three preceding runs, and
+an immediate re-run of this very job measured 36 and passed; ARM64 measured 4 on
+the same commit.
 
 The right fix is to give W2 the oracle W4 already has — a handle **count** with
 an explicit noise budget, a leak floor, and a non-vacuity assertion that the two

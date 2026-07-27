@@ -192,8 +192,9 @@ Do not summarize this file as "supports Linux, macOS and Windows."
   *values*, which advance in steps of 4 and drift with unrelated process
   activity. Its noise allowance is `2 * attempts` = 100 against a real-leak
   floor of about `4 * attempts` = 200, and one observed run landed on exactly
-  100 and failed. Measured deltas across runs of the same code were 0, 0, 8, 4,
-  and 100, so this is ambient churn at the boundary rather than a leak. The fix
+  100 and failed. Measured x86-64 deltas across runs of the same code were 0, 0, 8, 100,
+  and 36 -- an immediate re-run of the failing job measured 36 and passed -- so
+  this is ambient churn at the boundary rather than a leak. The fix
   is to give W2 the handle-*count* oracle W4 already uses -- noise budget, leak
   floor, and a non-vacuity assertion that the two stay separated -- not to widen
   the allowance, which would weaken a gate. Not an ARM64 finding: the same
