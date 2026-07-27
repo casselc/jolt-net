@@ -566,6 +566,7 @@ were invisible because those commits had never run through it:
 
 Windows ARM64 was deliberately **not** promoted. Its probe artifact is still
 unreviewed, no descriptor is committed, and none of these suites run there.
+(Task W7 below did that promotion later, on those terms.)
 
 Not taken from `7de096d`: its `src/jolt/net/target.clj` change relabelling the
 Linux aarch64 and Darwin x86-64 descriptors from `:inferred-from-*` to
@@ -584,6 +585,121 @@ Only after W1-W5 are reviewed:
 4. Re-run nREPL, Maven/dependency resolution, Teensyp/Capra compatibility, and
    ecosystem validation as consumers rather than as jolt-net implementation
    shortcuts.
+
+## Task W7: native Windows ARM64 runtime promotion
+
+Branch from reviewed W6 tip: `claude/windows-arm64-runtime`
+
+W5 left one Windows lane unpromoted, with the conditions for promoting it
+written down: review the native probe artifact into a committed descriptor, and
+make the same suites actually run there. W7 does exactly that and nothing more.
+
+### Did W7 change semantics?
+
+No. This was the first question asked, because the answer determines whether new
+proof models are owed.
+
+Windows ARM64 is another member of the **existing Windows contract family**, not
+a new contract. The evidence:
+
+- The native ARM64 probe is byte-identical to the Windows x86-64 probe apart
+  from the `:arch` label. Every fact the Winsock code branches on — `SOCKET`
+  width, `long`/`u_long` widths, the `FIONBIO` signed representation, the
+  address-length width, `WSAPOLLFD` size and offsets, the `WSAPoll` count and
+  timeout types, every `POLL*` value, every `WSAE*` code, and both `sockaddr`
+  layouts — is the same number.
+- No production source file changed. `src/jolt/net/target.clj` gained a
+  descriptor-table entry; no readiness, wake, lifecycle, or error code was
+  touched.
+- The four suites ran unmodified. The only script change is a `-ShellExe`
+  parameter, which moves a hardcoded `JOLT_SH` path into a parameter and alters
+  no assertion.
+
+So the correct action was **not** to invent a new SMT model. Inventing one would
+have implied a distinct ARM64 behavior that was not observed, which is its own
+kind of dishonesty. Instead the complete existing suite was rerun, and the
+Windows models' applicability to ARM64 is argued below from what they quantify
+over.
+
+### Why the Windows W1–W4 models apply to ARM64
+
+Each Windows-relevant model family is stated over an abstraction that names no
+architecture. Concretely:
+
+| Family | What it quantifies over | Architecture-dependent? |
+|---|---|---|
+| `winsock-init-once-*` | one CAS gate, attempt count, terminal memoized outcome | no |
+| `windows-nonblocking-contract-*` | binding declaration, command representation, nonzero `u_long`, mark ordering | only through the *values* of the FIONBIO command and `u_long` width, which the ARM64 probe supplies identically |
+| `readiness-*` | registration presence and complete-token (generation, revision) comparison | no |
+| `windows-wakeless-close-race-*` | lifecycle CAS shared by guard and transition, in the wake-less adapter | no |
+| `windows-terminal-wake-*` | publish-before-retire ordering, level-triggered terminal byte, drain/park interleaving | no |
+| `close-completion-ordering-*`, `wake-pair-*`, `wake-epoch-*`, `wake-receiver-lease-*`, `wake-cursor-ordering-*` | admission gating, lease lifetime, epoch arithmetic, cursor ordering | no |
+| `accept-terminal-close-*`, `connect-ownership-completion-*`, `idempotent-close-*`, `errno-capture-ordering-*`, `short-lease-post-close-*` | ownership, close, and error-capture ordering | no |
+
+Only `windows-nonblocking-contract-*` has any architecture-sensitive premise at
+all, and it is sensitive to *numbers* rather than to an instruction set: the
+model assumes `ioctlsocket`'s command is representable in the declared `long`
+and that the argument cell is a nonzero `u_long` of the probed width. The ARM64
+probe reports `:ioctl-cmd-bytes 4`, `:ioctl-arg-bytes 4`, and
+`:fionbio -2147195266` — the same values the model was discharged against on
+x86-64. The premise therefore holds here for a checked reason, not by analogy.
+
+### Assumptions the native gate discharges
+
+The models are bounded counterexample queries over an abstraction; they assume
+things about the machine that only a machine can settle. Running W1–W4 natively
+on ARM64 discharges these, and no others:
+
+1. **The probed facts are the facts this machine's Winsock uses.** The
+   descriptor is byte-compared against a freshly executed ARM64 probe twice per
+   run — once in the drift gate, once on the runtime runner itself.
+2. **The ABI marshalling those facts describe actually works here.** A
+   pointer-width `:uptr` `SOCKET`, 16-bit `WSAPOLLFD` event words at offsets
+   8/10, and a signed `long` FIONBIO command are all exercised through real
+   calls, not merely compared as integers.
+3. **The wake transport really delivers on this platform.** The connected IPv4
+   loopback datagram pair, and the terminal-byte close protocol the
+   `windows-terminal-wake-*` family models, are driven by W4.
+4. **The `WSAPoll` behavioral divergences hold here too** — FIN-with-no-data
+   reporting `POLLHUP` alone, and an unrecognized handle failing the whole call
+   rather than marking one entry. W3 asserts both rather than assuming them.
+5. **No handle or wake-handle leak accumulates** across repeated open/close
+   stress, checked without assuming POSIX-style numeric handle allocation.
+
+What the gate does **not** discharge: anything about packaged `joltc`, AOT
+images, or the property layer, none of which run on Windows ARM64.
+
+### Architecture is not taken on trust
+
+The runner image ships an x86_64 MinGW gcc, and Windows-on-ARM executes x64
+binaries under emulation, so a lane could produce entirely x86-64 evidence while
+sitting on an ARM machine. Six witnesses must agree before a socket is opened;
+they are tabulated in `docs/PLATFORM-COVERAGE.md`. Two are worth repeating here
+because they are the only ones that do not consist of a process describing
+itself: the compiled probe's and `scheme.exe`'s COFF machine fields, read with
+`dumpbin` and matched as `machine (ARM64)` *with* the closing parenthesis, so
+ARM64EC — an x64-compatible ABI — is rejected rather than accepted as close
+enough.
+
+Note honestly that witnesses 5 and 6, Chez's `(machine-type)` and
+`jolt.host/target`, are **not independent**: the core derives `:arch` from
+`(machine-type)` through an exact allowlist. They are listed as two checks
+because they fail at two different layers, not because they are two facts.
+
+### One observed ARM64/x86-64 difference
+
+The core's machine-name allowlist maps `tarm64nt` to `:abi :unknown`, where
+`ta6nt` maps to `:abi :win64`. jolt-net reads only `:os`, `:arch`, and
+`:pointer-bits`, and `:abi` is consumed nowhere outside the core's own AOT cache
+key, so this is informational rather than load-bearing. It is asserted on the
+gate anyway, so that if `:abi` ever starts selecting a calling convention, ARM64
+fails loudly instead of silently selecting `:unknown`.
+
+### W7 results
+
+Recorded in the branch report accompanying this task: hosted run ID, per-job
+status, the four gate counts and observed exit codes, the exact Chez and Jolt
+revisions, and the proof-suite verdicts.
 
 ## Alternate backends after the portable path
 

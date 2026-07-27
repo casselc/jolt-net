@@ -368,6 +368,34 @@ defined relative to await entry, so it cannot express a publication that is
 already visible when `await-ready` begins. That case is the wake-cursor trio's,
 and it is where the observed defect lived.
 
+## Task W7: native Windows ARM64, and why no model was added
+
+Task W7 promoted Windows/aarch64 from a preview artifact to a native socket
+runtime gate. It added **zero** files; the directory is still 51.
+
+That was a decision, not an oversight. W7 changes descriptor *selection* and
+platform *evidence*; it changes no lifecycle, readiness, or wake behavior, and
+no production source file outside one entry in the target table. Adding an
+`arm64-*` copy of an existing Windows family would assert an ARM64-specific
+semantics that was looked for and not found, and would make the file count grow
+without the verified set growing at all.
+
+What the models quantify over is argued in
+[`../socket-invariants.md`](../socket-invariants.md) under "Applicability: these
+models are keyed to an OS contract, not to an ISA". The short version: every
+Windows family is stated over CAS gates, lifecycle values, lease intervals,
+epoch counters, token pairs, and publish/retire orderings — none of which name
+an instruction set. The single architecture-sensitive premise belongs to
+`windows-nonblocking-contract-*`, and it is sensitive to numbers rather than to
+an ISA: the ARM64 probe reports the same `:ioctl-cmd-bytes 4`,
+`:ioctl-arg-bytes 4`, and `:fionbio -2147195266` the model was discharged
+against on x86-64.
+
+The complete suite was rerun for W7 rather than assumed still valid. All 51
+files were executed by a standalone `z3` 4.8.12 exactly as the shell example
+above: **18 `unsat` and 33 `sat`**, every file matching its declared verdict,
+with no file added, removed, or edited.
+
 The models omit scheduler fairness, native ABI implementation, weak-memory
 behavior beneath Clojure atom linearizability, failure of the atom/promise
 primitives themselves, thread death/cancellation, kernel bugs, numeric

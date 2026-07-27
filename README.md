@@ -39,6 +39,13 @@ The native Windows implementation is split into independently reviewable tasks
 in `docs/WINDOWS-RUNTIME-SEQUENCE.md`, including the exact PowerShell/Chez
 workflow and the evidence required before each capability is promoted.
 
+Both Windows architectures — **x86-64 and aarch64** — now run the same four
+native Winsock gates on real loopback sockets in hosted CI, with independently
+probed ABI descriptors. That is **source-mode** evidence: no packaged `joltc`
+and no AOT image has been built or tested on Windows ARM64, and the property
+layer does not run there. `docs/PLATFORM-COVERAGE.md` states each of those
+claims separately, and is the file to read rather than this paragraph.
+
 ## Non-blocking connect
 
 The substrate keeps connection policy above native socket ownership:

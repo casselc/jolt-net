@@ -742,6 +742,35 @@ premises exercised by the native gate, not established here.
 
 ---
 
+## Applicability: these models are keyed to an OS contract, not to an ISA
+
+Task W7 added native Windows **aarch64** to the platforms these invariants are
+claimed for. No model was added, changed, or re-derived for it, and that is a
+claim needing justification rather than an omission.
+
+Every model above is stated over an abstraction — a CAS gate, a lifecycle value,
+a lease interval, an epoch counter, a token pair, an ordering of publish and
+retire — that names no instruction set, no register width, and no calling
+convention. Re-deriving them per architecture would not make them stronger; it
+would produce identical files under different names and dilute what "verified"
+means here.
+
+Exactly one Windows family has an architecture-sensitive premise:
+`windows-nonblocking-contract-*` assumes `ioctlsocket`'s command is
+representable in the declared `long` and that the argument is a nonzero `u_long`
+of the probed width. That premise is about **numbers**, and the numbers were
+checked rather than assumed: a native ARM64 probe reports `:ioctl-cmd-bytes 4`,
+`:ioctl-arg-bytes 4`, and `:fionbio -2147195266`, identical to the values the
+model was discharged against on x86-64. Had any of them differed, this section
+would say so and a corrected model would exist.
+
+The models remain conditional on their premises. What the ARM64 native gate
+supplies is evidence that those premises hold on that machine — that the probed
+facts are the facts Winsock uses there, that the marshalling they describe
+executes, that the datagram wake transport really delivers, and that the two
+`WSAPoll` divergences recorded in `docs/PLATFORM-COVERAGE.md` also hold. It does
+not, and is not reported to, make any model unconditional.
+
 ## What is deliberately not modelled
 
 - **Resolver copy-before-free.** This is a memory-lifetime property, and the
@@ -755,7 +784,10 @@ premises exercised by the native gate, not established here.
   also normalize only the probe's architecture label and require every native
   constant, width, `sizeof`, and `offsetof` to match the explicitly shared
   descriptor before running socket tests. Darwin/x86-64 remains a separately
-  uploaded artifact rather than being silently relabeled as arm64 evidence.
+  uploaded artifact rather than being silently relabeled as arm64 evidence, and
+  Windows/aarch64 was probed by a separate compiler on a separate machine and
+  only then compared with Windows/x86-64 — the two agree completely, but the
+  agreement is a regenerated CI result, not a copy.
 - **Native calling conventions.** The POSIX non-blocking model proves the
   source-level admission and fail-closed read-back postcondition. The Windows
   model is conditional on the header-matching binding, requested value, command

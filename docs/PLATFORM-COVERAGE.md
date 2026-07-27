@@ -24,7 +24,7 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 | Linux x86-64 | **probed** | **runtime** | **runtime** | The development and CI platform. Real `fcntl`, `poll`, pipe-wake, sliced byte I/O, EOF, non-blocking connect/`SO_ERROR`, mutation wake, and close races are exercised. |
 | Linux aarch64 | **probed** | **runtime** | **runtime** | The `ubuntu-24.04-arm` job diffs every freshly probed fact against the explicit x86-64 alias before running real sockets. Probe, blocking/non-blocking runtime, poller races, and required Hegel properties passed on revision `f0affc4` in CI run `30144054281`. |
 | Windows x86-64 | **probed** | **runtime** | **runtime** (byte I/O, connect, `WSAPoll` readiness, **and the public poller**) | Hosted Windows CI ran all four native gates on revision `0e66bcf` in [CI run 30169225227](https://github.com/casselc/jolt-net/actions/runs/30169225227): W1 162/162, W2 56/56, W3 124/124, and the W4 public-poller gate 73/73, each with a required observed child exit code of 0, against a source-built official Chez 10.4.1 and the pinned Jolt fork `85f645aa`. The same four counts had passed locally on `38ff1db` beforehand. The `WSAPOLLFD` layout, flag values, and `WSAPoll` signature are probed from real Windows headers and gated byte-for-byte by the drift job; a local MinGW re-run of `tools/probe-constants.c` on this revision showed no drift from the committed table. Readiness covers read, write, error, hangup/EOF, zero and positive timeouts, captured failure, readiness-driven connect completion, forced short reads, and stale generation/revision/removal token rejection. Task W4 added an owner-independent wake transport — a connected IPv4 loopback datagram pair, chosen because both ends are real `SOCKET`s and `WSAPoll` accepts nothing else — so `jolt.net/open-poller` now works here, `close!` is a completion boundary rather than a refusal, and blocking `accept` is readiness-driven. The W3 wake-less adapter is retained, and its refusals remain evidence for a poller built *without* a waker rather than for this transport. The gates carry no jolt-hegel alias and download no artifact, so a dependency-resolution failure cannot quietly erase this runtime coverage. |
-| Windows aarch64 | **preview artifact** | none | none | CI run `30144909720` built native `tarm64nt` Chez 10.4.1, executed the ABI probe with ARM64 MSVC, and passed direct source-mode target/fail-closed selection. The uploaded facts match Windows x86-64 after normalizing only CRLF and the architecture label, but no descriptor is committed yet. |
+| Windows aarch64 | **probed** | **runtime** | **runtime** (byte I/O, connect, `WSAPoll` readiness, **and the public poller**) | Task W7. `tools/probed/windows-aarch64.edn` is committed from an ARM64 MSVC probe **executed** on `windows-11-vs2026-arm`, and the `windows-11-vs2026-arm` runtime lane runs the same four native gates the x86-64 lane runs — W1, W2, W3, and the W4 public poller — against real loopback sockets in a native `tarm64nt` process, with the AOT cache off and no jolt-hegel alias. See the run and counts recorded in `docs/WINDOWS-RUNTIME-SEQUENCE.md` §W7. Every fact is byte-identical to the Windows x86-64 column apart from `:arch`; that equality is a **recorded observation from an independent probe**, not an inference, which is why `:evidence` is `:probed` rather than an `:inferred-from-*` alias like Linux aarch64's. This is source-mode evidence only: no packaged `joltc` or AOT image was built or tested here. |
 | macOS arm64 | **probed** | **runtime** | **runtime** | The complete native suite passes with source-built Chez 10.4.1: variadic-ABI-correct `fcntl`, `poll(2)`, non-blocking connect/`SO_ERROR`, sliced byte I/O, SIGPIPE, close races, and the owner-independent self-pipe protocol, with Darwin's distinct 32-bit `nfds_t` binding. |
 | macOS x86-64 | **probed** | **runtime** | **runtime** | The live x86_64 probe is normalized only at the architecture label and diffed against the explicit shared-Darwin descriptor. Probe, full socket/poller runtime, source-built pinned libhegel, and required Hegel properties passed on revision `f0affc4` in CI run `30144054281`. |
 
@@ -60,10 +60,43 @@ Do not summarize this file as "supports Linux, macOS and Windows."
   `11142a3`, the native W1 suite observed exact `10061` and `10048` in the same
   process; scalar dispatch owns only error-independent `close`.
 - **Windows ARM64 evidence boundary.** The hosted runner includes an x86_64
-  MinGW gcc that can run under emulation. The preview therefore invokes
-  `cl.exe` only after selecting the MSVC `x64_arm64` environment and rejects
-  probe output without `:arch :aarch64`. The resulting artifact is evidence to
-  review, not permission to infer a descriptor from Windows x86-64.
+  MinGW gcc, and Windows-on-ARM executes x64 binaries under emulation, so
+  "the job ran on an ARM runner" is not by itself evidence that ARM64 code did
+  any of the work. Both ARM64 lanes therefore require **six** independent
+  architecture witnesses to agree before a socket is opened:
+
+  | # | Witness | Where checked |
+  |---:|---|---|
+  | 1 | GitHub runner architecture (`runner.arch`) | workflow step |
+  | 2 | selected MSVC target (`VSCMD_ARG_TGT_ARCH`) | `tools/msvc-arm64-env.bat` |
+  | 3 | compiled ABI probe's PE machine type | `tools/assert-arm64-image.bat` |
+  | 4 | `scheme.exe`'s PE machine type | `tools/assert-arm64-image.bat` |
+  | 5 | Chez's own `(machine-type)` — must be `tarm64nt` | workflow step |
+  | 6 | `jolt.host/target` as jolt-net's selector sees it | `test/jolt/net/windows_arm64_runtime.clj` |
+
+  Witnesses 5 and 6 are **not independent of each other** — the core derives
+  `:arch` from `(machine-type)` through an exact allowlist — and the doc says so
+  rather than counting the same fact twice. The genuinely independent ones are 3
+  and 4: the COFF machine field reports what a file *is*, not what a process
+  says about itself. `assert-arm64-image.bat` matches `machine (ARM64)` with the
+  closing parenthesis so that **ARM64EC**, which is an x64-compatible ABI, is
+  rejected rather than accepted as a near-miss.
+- **One real Windows ARM64/x86-64 difference exists, and it is in the target map
+  rather than in Winsock.** The core's machine-name allowlist maps `tarm64nt` to
+  `:abi :unknown` where `ta6nt` maps to `:abi :win64`. jolt-net reads only
+  `:os`, `:arch`, and `:pointer-bits`; `:abi` is consumed nowhere outside the
+  core's own AOT cache key, so the difference is informational. It is asserted
+  explicitly on the ARM64 gate anyway, so that if `:abi` ever becomes
+  load-bearing for ABI selection the gate fails on ARM64 instead of quietly
+  selecting an unknown calling convention.
+- **What the Windows ARM64 promotion does NOT claim.** Descriptor evidence,
+  source-runtime evidence, and packaged evidence are three separate claims and
+  only the first two are held here. No `joltc` package was built for Windows
+  ARM64, no AOT image was produced or loaded (the gates run with
+  `JOLT_AOT_CACHE=0` precisely so a stale artifact cannot validate a revision),
+  and the full `-M:test` suite — which resolves the jolt-hegel Git dependency —
+  has never run on this platform. The four gates deliberately carry no Hegel
+  alias, so Windows ARM64 has **no** property-test coverage.
 - **Windows non-blocking transitions and byte I/O are now exercised on a real
   Windows machine** (task W2, `docs/WINDOWS-RUNTIME-SEQUENCE.md`). `FIONBIO`
   and the widths of `ioctlsocket`'s `long` command and `u_long` argument are
@@ -214,12 +247,22 @@ observe a real child process exit code: a step that cannot see one now fails
 rather than reporting green, because in a fresh step process `$LASTEXITCODE` can
 be unset and `exit $null` exits 0.
 
-The remaining Windows gap is **ARM64**. A non-gating native preview produces its
-ABI artifact and proves that unreviewed selection fails closed, but no
-descriptor is committed, so ARM64 cannot load descriptor-backed namespaces and
-none of the socket suites run there. It stays a preview artifact until that
-probe is reviewed into a descriptor and these same gates genuinely execute on
-it. Do not infer an ARM64 descriptor from the x86-64 one.
+Task W7 closed the Windows **ARM64** gap the same way, and on the same terms: an
+independently probed descriptor, then the identical four gates on real sockets
+in a native `tarm64nt` process. The suites were not forked. The only change the
+scripts needed was a `-ShellExe` parameter, because `JOLT_SH` was the last
+runtime path still hardcoded and Git for Windows is not at the same location on
+every image; no lifecycle, deadline, EOF, cancellation, stale-token, wake, or
+leak-check behavior was altered, and no ARM-specific variant exists.
+
+What remains unproven on Windows ARM64 is everything **above** source mode:
+packaged `joltc`, AOT images, and the Hegel property layer. Those are separate
+claims and this file does not make them.
+
+Do not infer an ARM64 descriptor from the x86-64 one. The two agree completely,
+but they agree because two different compilers on two different machines were
+asked and their answers compared — which is a fact CI regenerates every run, not
+a shortcut that was taken once.
 
 Note also that ABI probing and socket-runtime evidence are separate claims. The
 probe job proves the numbers; it opens no socket. A table check, a cross-build,
@@ -227,8 +270,14 @@ a namespace load, or a source-mode selection check is never evidence that a
 socket was opened.
 
 CI (`.github/workflows/ci.yml`) re-probes Linux x86_64, Linux aarch64, macOS
-arm64, macOS x86_64, and Windows x86_64 on each push. A separate preview
-produces Windows aarch64 evidence without promoting it to the committed table.
+arm64, macOS x86_64, Windows x86_64, and Windows aarch64 on each push. The
+Windows aarch64 probe is a small job of its own rather than part of the bash
+matrix — that matrix would find the image's emulated x86_64 `cc` — and the
+`tables` drift gate depends on it, so the ARM64 column is regenerated and
+byte-compared like the other five instead of living in a lane nothing gates on.
+The ARM64 runtime job then re-probes and compares a second time, on the machine
+that goes on to open the sockets.
+
 CI fails if a committed descriptor disagrees with the platform's real headers;
 the Linux arm64 and Intel macOS runtime jobs also require their complete probes
 to match their explicit descriptor aliases.
