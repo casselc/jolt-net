@@ -187,6 +187,17 @@ Do not summarize this file as "supports Linux, macOS and Windows."
   complete POSIX-runtime jobs. Both passed in run `30144054281`; the runtime job
   proves the explicit shared-Darwin descriptor by diffing all live facts and
   builds the pinned libhegel source because no matching release asset exists.
+- **A known-flaky x86-64 W2 leak assertion, left failing-as-found.** The W2
+  check `50 failed initiations leak no descriptors` compares Windows handle
+  *values*, which advance in steps of 4 and drift with unrelated process
+  activity. Its noise allowance is `2 * attempts` = 100 against a real-leak
+  floor of about `4 * attempts` = 200, and one observed run landed on exactly
+  100 and failed. Measured deltas across runs of the same code were 0, 0, 8, 4,
+  and 100, so this is ambient churn at the boundary rather than a leak. The fix
+  is to give W2 the handle-*count* oracle W4 already uses -- noise budget, leak
+  floor, and a non-vacuity assertion that the two stay separated -- not to widen
+  the allowance, which would weaken a gate. Not an ARM64 finding: the same
+  assertion passed on ARM64 in the same commit.
 - **Readiness hot-path shape.** Listener, connected, and accepted descriptors
   enter nonblocking mode once. A scoped core FFI primitive pins and exposes the
   validated interior pointer for every byte-array slice, so partial recv/send

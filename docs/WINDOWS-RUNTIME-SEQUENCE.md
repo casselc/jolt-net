@@ -757,6 +757,34 @@ ok  50 failed initiations leak no descriptors
 Proof suite: 51 files, unchanged, rerun with standalone `z3` 4.8.12 — 18 `unsat`
 and 33 `sat`, every file matching its declared verdict.
 
+### An unresolved pre-existing flake, found but deliberately not "fixed"
+
+A confirming run of the same tree (docs-only diff) hit this on **Windows
+x86-64**, in W2:
+
+```text
+FAIL  50 failed initiations leak no descriptors
+        (before 416, after 516, delta 100, allowance 100)
+```
+
+It is recorded here rather than quietly re-run away, and it is **not** an ARM64
+finding — the identical assertion passed on ARM64 in the same commit.
+
+The check compares the *handle value* of a fresh listen socket before and after
+50 rejected initiations. On Windows those values advance in steps of 4 and
+wander with unrelated process activity, so the assertion carries a noise
+allowance of `2 * attempts` = 100 against a real-leak floor of roughly
+`4 * attempts` = 200. The observed 100 is ambient churn landing exactly on the
+allowance boundary, not a leak: a genuine leak of 50 sockets would have to show
+about 200, and the four preceding runs of the same code measured 0, 0, 8, and 4.
+
+The right fix is to give W2 the oracle W4 already has — a handle **count** with
+an explicit noise budget, a leak floor, and a non-vacuity assertion that the two
+are still separated — rather than to widen the allowance. Widening it is exactly
+the kind of gate-weakening this sequence forbids, and doing it during an ARM64
+task would be weakening an x86-64 gate for an unrelated reason. It is therefore
+left failing-as-found and handed on as known work.
+
 One defect was found and fixed during the task, and it is worth recording
 because it was a check that could never have passed: the machine-type witness
 originally used `scheme.exe --eval`, and Chez has no `--eval` flag — it tried to
