@@ -697,9 +697,72 @@ fails loudly instead of silently selecting `:unknown`.
 
 ### W7 results
 
-Recorded in the branch report accompanying this task: hosted run ID, per-job
-status, the four gate counts and observed exit codes, the exact Chez and Jolt
-revisions, and the proof-suite verdicts.
+Hosted result on revision `0e4265e`, [CI run
+30312184699](https://github.com/casselc/jolt-net/actions/runs/30312184699), all
+13 jobs green — including the pre-existing x86-64, Linux, and macOS gates, none
+of which were weakened to get ARM64 there.
+
+Native `tarm64nt` Chez 10.4.1 built from source on `windows-11-vs2026-arm`,
+proposal core `46e1f74f`, source mode, `JOLT_AOT_CACHE=0`:
+
+| Gate | Count | Timeout | Exit |
+|---|---|---|---|
+| W1 blocking sockets | 184/184 | 90 s | 0 |
+| W2 non-blocking I/O | 56/56 | 90 s | 0 |
+| W3 `WSAPoll` readiness | 124/124 | 240 s | 0 |
+| W4 public poller and wake | 73/73 | 300 s | 0 |
+
+Zero failures and **zero skips** in all four, and the counts are identical to
+what the x86-64 lane produced in the same run — which is the expected result
+when the same suites run against the same ABI facts, and would have been
+suspicious had it come out any other way.
+
+The six architecture witnesses as actually observed:
+
+```text
+runner.arch      = ARM64
+PROCESSOR_ARCH   = ARM64
+msvc-arm64-env: VSCMD_ARG_TGT_ARCH=arm64 VSCMD_ARG_HOST_ARCH=arm64
+            AA64 machine (ARM64)      <- probe-windows-aarch64.exe
+            AA64 machine (ARM64)      <- tarm64nt\bin\tarm64nt\scheme.exe
+chez version: 10.4.1
+chez machine-type: tarm64nt
+jolt.host/target: {:os :windows, :arch :aarch64, :abi :unknown, :libc :unknown,
+                   :endian :little, :pointer-bits 64, ...}
+OK:  windows-aarch64.edn matches this machine's real headers byte-for-byte
+```
+
+Note the MSVC line: the toolchain selected was **host arm64, target arm64** —
+fully native, no emulation. The committed descriptor was originally produced by
+the `x64_arm64` cross toolchain in the earlier preview, and the native toolchain
+reproduced it byte-for-byte, which is an unplanned but useful corroboration.
+
+Leak evidence, from W4's repeated-cycle stress. These count process handles
+rather than assuming POSIX-style numeric allocation, and each carries a
+non-vacuity oracle so a passing delta cannot be a broken measurement:
+
+```text
+ok  accept cycles leak no handles (40 cycles, before 484, after 484,
+      signed delta 0, a real leak would advance ~1280, refusing at 640)
+ok  accept cycles leak no handles: the oracle still separates noise from a leak
+      (noise budget 150, leak floor 640)
+ok  poller open/close cycles leak no handles (60 cycles, before 512, after 512,
+      signed delta 0, a real leak would advance ~960, refusing at 480)
+ok  poller open/close cycles leak no handles: the oracle still separates noise
+      from a leak (noise budget 150, leak floor 480)
+ok  50 failed initiations leak no descriptors
+      (before 480, after 484, delta 4, allowance 100)
+```
+
+Proof suite: 51 files, unchanged, rerun with standalone `z3` 4.8.12 — 18 `unsat`
+and 33 `sat`, every file matching its declared verdict.
+
+One defect was found and fixed during the task, and it is worth recording
+because it was a check that could never have passed: the machine-type witness
+originally used `scheme.exe --eval`, and Chez has no `--eval` flag — it tried to
+open the string as a file. The gate failed closed, which is the right behavior
+for an unusable check, but it meant the witness was decorative until it was
+rewritten to ask through a one-line `--script`. Fixed in `0e4265e`.
 
 ## Alternate backends after the portable path
 
