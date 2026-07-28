@@ -771,6 +771,14 @@ executes, that the datagram wake transport really delivers, and that the two
 `WSAPoll` divergences recorded in `docs/PLATFORM-COVERAGE.md` also hold. It does
 not, and is not reported to, make any model unconditional.
 
+W7.1 strengthens the executable resource evidence without changing this proof
+boundary. W2 and W4 now read the current process's handle count, first prove the
+counter observes six deliberately open sockets, and then require repeated
+rollback, poller, and accept cycles to remain below half the signal from one
+systematically leaked handle per cycle. This is a native conformance oracle for
+the models' no-leak controls, not a new ownership transition; the unchanged
+model suite was rerun rather than duplicated.
+
 ## What is deliberately not modelled
 
 - **Resolver copy-before-free.** This is a memory-lifetime property, and the

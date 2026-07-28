@@ -664,7 +664,9 @@ on ARM64 discharges these, and no others:
    reporting `POLLHUP` alone, and an unrecognized handle failing the whole call
    rather than marking one entry. W3 asserts both rather than assuming them.
 5. **No handle or wake-handle leak accumulates** across repeated open/close
-   stress, checked without assuming POSIX-style numeric handle allocation.
+   stress. The initial W7 oracle still sampled numeric handle allocation and did
+   not fully discharge this premise; W7.1 replaces it with the process resource
+   count and live calibration described below.
 
 What the gate does **not** discharge: anything about packaged `joltc`, AOT
 images, or the property layer, none of which run on Windows ARM64.
@@ -697,8 +699,8 @@ fails loudly instead of silently selecting `:unknown`.
 
 ### W7 results
 
-Hosted result on revision `0e4265e`, [CI run
-30312184699](https://github.com/casselc/jolt-net/actions/runs/30312184699), all
+Hosted result on final W7 revision `5da1855`, [CI run
+30313054115](https://github.com/casselc/jolt-net/actions/runs/30313054115), all
 13 jobs green — including the pre-existing x86-64, Linux, and macOS gates, none
 of which were weakened to get ARM64 there.
 
@@ -737,9 +739,13 @@ fully native, no emulation. The committed descriptor was originally produced by
 the `x64_arm64` cross toolchain in the earlier preview, and the native toolchain
 reproduced it byte-for-byte, which is an unplanned but useful corroboration.
 
-Leak evidence, from W4's repeated-cycle stress. These count process handles
-rather than assuming POSIX-style numeric allocation, and each carries a
-non-vacuity oracle so a passing delta cannot be a broken measurement:
+The initial W7 report misidentified the following output as process-handle
+counts. Source review of exact revision `5da1855` found that
+`handle-probe!` opened a listener and returned `net/native-handle`: these are
+**socket handle allocator positions**, not counts. They showed no catastrophic
+one-way movement during the loops, but they did not prove that every resource
+was returned, and their static “noise separation” check was not a non-vacuity
+test of the measurement itself:
 
 ```text
 ok  accept cycles leak no handles (40 cycles, before 484, after 484,
@@ -780,12 +786,11 @@ about 200. The x86-64 lane measured 0, 0, and 8 on the three preceding runs, and
 an immediate re-run of this very job measured 36 and passed; ARM64 measured 4 on
 the same commit.
 
-The right fix is to give W2 the oracle W4 already has — a handle **count** with
-an explicit noise budget, a leak floor, and a non-vacuity assertion that the two
-are still separated — rather than to widen the allowance. Widening it is exactly
-the kind of gate-weakening this sequence forbids, and doing it during an ARM64
-task would be weakening an x86-64 gate for an unrelated reason. It is therefore
-left failing-as-found and handed on as known work.
+The right fix is to use a process handle **count** with an explicit noise
+budget, a leak floor, and a live non-vacuity assertion that deliberate sockets
+raise the count — rather than to widen the allowance. Widening it is exactly
+the kind of gate-weakening this sequence forbids. W7 therefore left the finding
+as-found; the bounded W7.1 follow-up below fixes both W2 and W4.
 
 One defect was found and fixed during the task, and it is worth recording
 because it was a check that could never have passed: the machine-type witness
@@ -793,6 +798,53 @@ originally used `scheme.exe --eval`, and Chez has no `--eval` flag — it tried 
 open the string as a file. The gate failed closed, which is the right behavior
 for an unusable check, but it meant the witness was decorative until it was
 rewritten to ask through a one-line `--script`. Fixed in `0e4265e`.
+
+## Task W7.1: resource-count leak oracle correction
+
+Source review after W7 compared its report to the exact test implementation and
+found the evidence mismatch above. Revision `1090b3e` replaced every
+Windows-only allocator-position leak check in W2 and W4 with a small test-only
+binding to `GetCurrentProcess` plus `GetProcessHandleCount`.
+
+The measurement has two complementary guards:
+
+1. Each suite opens six real loopback listeners concurrently and requires the
+   process count to rise by at least six. A constant counter, wrong process
+   handle, or counter that excludes sockets therefore fails rather than making
+   every zero delta look healthy.
+2. The visible ambient-noise budget is 10 handles and must remain strictly
+   below the modeled leak floor. W2's 50 rollback attempts refuse at 25.
+   W4 was subsequently strengthened at `c374738` to model the minimum systematic
+   defect — **one** retained handle per cycle — rather than only a complete
+   operation leaking all of its owned handles. Its 60 poller cycles refuse at
+   30 and its 40 accept cycles refuse at 20.
+
+The first hosted correction run, revision `1090b3e`, [CI run
+30314204823](https://github.com/casselc/jolt-net/actions/runs/30314204823),
+passed all 13 jobs. Both Windows architectures produced identical gate counts:
+
+| Gate | Count | Exit |
+|---|---:|---:|
+| W1 blocking sockets | 184/184 | 0 |
+| W2 non-blocking I/O | 58/58 | 0 |
+| W3 `WSAPoll` readiness | 124/124 | 0 |
+| W4 public poller and wake | 74/74 | 0 |
+
+On x86-64 W2 measured 134 → 134, W4 pollers 135 → 135, and W4 accepts
+135 → 135. On ARM64 the corresponding measurements were 135 → 135,
+136 → 136, and 136 → 136. Every delta was zero; both runs first observed the
+six deliberately open sockets. The stronger one-handle-per-cycle thresholds
+retain the same assertion counts. Revision `8681535` then passed all 13 jobs in
+[CI run
+30322347132](https://github.com/casselc/jolt-net/actions/runs/30322347132),
+including those stronger thresholds on both Windows architectures and all four
+POSIX runtime suites against the publicly mirrored v0.5.7 Hegel integration.
+
+This correction changes test instrumentation and evidence only. It changes no
+production source, ABI descriptor, ownership transition, readiness behavior, or
+wake ordering, so no new solver model is owed. The complete unchanged model
+suite was nevertheless rerun: 51 files under standalone Z3 4.8.12, 18 `unsat`
+and 33 `sat`, matching the W7 verdict totals.
 
 ## Alternate backends after the portable path
 

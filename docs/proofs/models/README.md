@@ -396,6 +396,13 @@ files were executed by a standalone `z3` 4.8.12 exactly as the shell example
 above: **18 `unsat` and 33 `sat`**, every file matching its declared verdict,
 with no file added, removed, or edited.
 
+W7.1 replaced a Windows test oracle that sampled numeric socket handle values
+with a live `GetProcessHandleCount` measurement. It adds no model: resource
+accounting by an operating-system process counter is native conformance
+evidence, and the correction changes no production transition or solver
+premise. The unchanged 51 files were rerun after the correction under standalone
+Z3 4.8.12 with the same **18 `unsat` / 33 `sat`** totals.
+
 The models omit scheduler fairness, native ABI implementation, weak-memory
 behavior beneath Clojure atom linearizability, failure of the atom/promise
 primitives themselves, thread death/cancellation, kernel bugs, numeric

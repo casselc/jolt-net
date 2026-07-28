@@ -595,10 +595,12 @@ jobs:
   # necessary is still true: the runner image carries an x86_64 MinGW gcc and
   # Windows-on-ARM runs x64 binaries under emulation, so "it ran on an ARM
   # runner" is not evidence that ARM64 code did the work. The job therefore
-  # requires six independent statements of architecture to agree -- the runner
-  # label, the selected MSVC target, the compiled probe's PE machine type,
-  # scheme.exe's PE machine type, Chez's own (machine-type), and jolt.host/target
-  # as seen by jolt-net's selector -- before any socket is opened.
+  # requires six architecture checks to agree -- the runner label, selected
+  # MSVC target, compiled probe's PE machine type, scheme.exe's PE machine type,
+  # Chez's own (machine-type), and jolt.host/target as seen by jolt-net's
+  # selector -- before any socket is opened. The final two are checks at
+  # different layers but are not independent: target derives arch from Chez's
+  # machine type.
   #
   # Source mode, AOT cache off, no jolt-hegel alias, no artifact download in the
   # socket path, and every gate must observe a real child exit code.

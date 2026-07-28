@@ -23,8 +23,8 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 |---|---|---|---|---|
 | Linux x86-64 | **probed** | **runtime** | **runtime** | The development and CI platform. Real `fcntl`, `poll`, pipe-wake, sliced byte I/O, EOF, non-blocking connect/`SO_ERROR`, mutation wake, and close races are exercised. |
 | Linux aarch64 | **probed** | **runtime** | **runtime** | The `ubuntu-24.04-arm` job diffs every freshly probed fact against the explicit x86-64 alias before running real sockets. Probe, blocking/non-blocking runtime, poller races, and required Hegel properties passed on revision `f0affc4` in CI run `30144054281`. |
-| Windows x86-64 | **probed** | **runtime** | **runtime** (byte I/O, connect, `WSAPoll` readiness, **and the public poller**) | Hosted Windows CI ran all four native gates on revision `0e66bcf` in [CI run 30169225227](https://github.com/casselc/jolt-net/actions/runs/30169225227): W1 162/162, W2 56/56, W3 124/124, and the W4 public-poller gate 73/73, each with a required observed child exit code of 0, against a source-built official Chez 10.4.1 and the pinned Jolt fork `85f645aa`. The same four counts had passed locally on `38ff1db` beforehand. This lane is unchanged by task W7 and re-passed alongside the new ARM64 gate on revision `0e4265e` in [CI run 30312184699](https://github.com/casselc/jolt-net/actions/runs/30312184699) at W1 184/184, W2 56/56, W3 124/124, W4 73/73 — W1's count grew from 162 with the W6 wake-cursor assertions, not with W7. The `WSAPOLLFD` layout, flag values, and `WSAPoll` signature are probed from real Windows headers and gated byte-for-byte by the drift job; a local MinGW re-run of `tools/probe-constants.c` on this revision showed no drift from the committed table. Readiness covers read, write, error, hangup/EOF, zero and positive timeouts, captured failure, readiness-driven connect completion, forced short reads, and stale generation/revision/removal token rejection. Task W4 added an owner-independent wake transport — a connected IPv4 loopback datagram pair, chosen because both ends are real `SOCKET`s and `WSAPoll` accepts nothing else — so `jolt.net/open-poller` now works here, `close!` is a completion boundary rather than a refusal, and blocking `accept` is readiness-driven. The W3 wake-less adapter is retained, and its refusals remain evidence for a poller built *without* a waker rather than for this transport. The gates carry no jolt-hegel alias and download no artifact, so a dependency-resolution failure cannot quietly erase this runtime coverage. |
-| Windows aarch64 | **probed** | **runtime** | **runtime** (byte I/O, connect, `WSAPoll` readiness, **and the public poller**) | Task W7. `tools/probed/windows-aarch64.edn` is committed from an ARM64 MSVC probe **executed** on `windows-11-vs2026-arm`, and the `windows-11-vs2026-arm` runtime lane runs the same four native gates the x86-64 lane runs — W1, W2, W3, and the W4 public poller — against real loopback sockets in a native `tarm64nt` process, with the AOT cache off and no jolt-hegel alias. All four passed on revision `0e4265e` in [CI run 30312184699](https://github.com/casselc/jolt-net/actions/runs/30312184699): W1 184/184, W2 56/56, W3 124/124, W4 73/73, each with a required observed child exit code of 0, zero failures and zero skips, against source-built official Chez 10.4.1 (`tarm64nt`) and the pinned Jolt fork `46e1f74f`. The counts are identical to the x86-64 lane in the same run. W4's repeated-cycle stress reported signed handle delta 0 over 40 accept and 60 poller open/close cycles, measured by process handle count rather than by assuming POSIX-style numeric allocation. See `docs/WINDOWS-RUNTIME-SEQUENCE.md` §W7. Every fact is byte-identical to the Windows x86-64 column apart from `:arch`; that equality is a **recorded observation from an independent probe**, not an inference, which is why `:evidence` is `:probed` rather than an `:inferred-from-*` alias like Linux aarch64's. This is source-mode evidence only: no packaged `joltc` or AOT image was built or tested here. |
+| Windows x86-64 | **probed** | **runtime** | **runtime** (byte I/O, connect, `WSAPoll` readiness, **and the public poller**) | W7.1 revision `8681535` ran all 13 jobs green in [CI run 30322347132](https://github.com/casselc/jolt-net/actions/runs/30322347132), including W1 184/184, W2 58/58, W3 124/124, and W4 74/74 with zero failures and zero skips. W2 and W4 now use `GetProcessHandleCount`, first prove that six deliberately open sockets raise the count, then reject even one systematic retained handle per operation cycle above a separately stated noise budget. W2 measured 134 → 134; W4 measured 135 → 135 over both 60 poller and 40 accept cycles. The `WSAPOLLFD` layout, flag values, and `WSAPoll` signature remain independently probed and byte-gated. Readiness covers read, write, error, hangup/EOF, deadlines, captured failure, connect completion, short reads, token rejection, the owner-independent datagram wake transport, completion-boundary close, and readiness-driven blocking accept. |
+| Windows aarch64 | **probed** | **runtime** | **runtime** (byte I/O, connect, `WSAPoll` readiness, **and the public poller**) | `tools/probed/windows-aarch64.edn` comes from an ARM64 MSVC probe executed on `windows-11-vs2026-arm`. The native `tarm64nt` lane runs the same four gates as x86-64, over real loopback sockets with AOT disabled. On W7.1 revision `8681535` in [CI run 30322347132](https://github.com/casselc/jolt-net/actions/runs/30322347132), it passed W1 184/184, W2 58/58, W3 124/124, and W4 74/74 with zero failures and zero skips. W2 measured process handles 135 → 135; W4 measured 136 → 136 over both the 60-poller and 40-accept loops, after the live six-socket non-vacuity check. Every descriptor fact is byte-identical to the x86-64 column apart from `:arch`; that is a regenerated observation, not an inferred alias. This is source-runtime evidence only: no packaged `joltc` or AOT image was built or tested here. |
 | macOS arm64 | **probed** | **runtime** | **runtime** | The complete native suite passes with source-built Chez 10.4.1: variadic-ABI-correct `fcntl`, `poll(2)`, non-blocking connect/`SO_ERROR`, sliced byte I/O, SIGPIPE, close races, and the owner-independent self-pipe protocol, with Darwin's distinct 32-bit `nfds_t` binding. |
 | macOS x86-64 | **probed** | **runtime** | **runtime** | The live x86_64 probe is normalized only at the architecture label and diffed against the explicit shared-Darwin descriptor. Probe, full socket/poller runtime, source-built pinned libhegel, and required Hegel properties passed on revision `f0affc4` in CI run `30144054281`. |
 
@@ -62,8 +62,8 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 - **Windows ARM64 evidence boundary.** The hosted runner includes an x86_64
   MinGW gcc, and Windows-on-ARM executes x64 binaries under emulation, so
   "the job ran on an ARM runner" is not by itself evidence that ARM64 code did
-  any of the work. Both ARM64 lanes therefore require **six** independent
-  architecture witnesses to agree before a socket is opened:
+  any of the work. Both ARM64 lanes therefore require **six architecture
+  checks** to agree before a socket is opened:
 
   | # | Witness | Where checked |
   |---:|---|---|
@@ -187,18 +187,16 @@ Do not summarize this file as "supports Linux, macOS and Windows."
   complete POSIX-runtime jobs. Both passed in run `30144054281`; the runtime job
   proves the explicit shared-Darwin descriptor by diffing all live facts and
   builds the pinned libhegel source because no matching release asset exists.
-- **A known-flaky x86-64 W2 leak assertion, left failing-as-found.** The W2
-  check `50 failed initiations leak no descriptors` compares Windows handle
-  *values*, which advance in steps of 4 and drift with unrelated process
-  activity. Its noise allowance is `2 * attempts` = 100 against a real-leak
-  floor of about `4 * attempts` = 200, and one observed run landed on exactly
-  100 and failed. Measured x86-64 deltas across runs of the same code were 0, 0, 8, 100,
-  and 36 -- an immediate re-run of the failing job measured 36 and passed -- so
-  this is ambient churn at the boundary rather than a leak. The fix
-  is to give W2 the handle-*count* oracle W4 already uses -- noise budget, leak
-  floor, and a non-vacuity assertion that the two stay separated -- not to widen
-  the allowance, which would weaken a gate. Not an ARM64 finding: the same
-  assertion passed on ARM64 in the same commit.
+- **The flaky x86-64 leak assertion is resolved without widening it.** W7's W2
+  and W4 tests both sampled numeric socket handle values, which are allocator
+  positions and drift with unrelated Windows process activity. The W7 report
+  incorrectly described W4's values as process-handle counts. W7.1 replaces
+  every Windows leak sample with `GetProcessHandleCount`, proves the measurement
+  live by opening six sockets, states a ten-handle noise budget, and rejects at
+  half the signal from the minimum systematic defect of one retained handle per
+  cycle. POSIX keeps its tighter lowest-free-fd oracle. Both Windows
+  architectures measured zero retained handles in W2 and both W4 stress loops;
+  see `docs/WINDOWS-RUNTIME-SEQUENCE.md` §W7.1.
 - **Readiness hot-path shape.** Listener, connected, and accepted descriptors
   enter nonblocking mode once. A scoped core FFI primitive pins and exposes the
   validated interior pointer for every byte-array slice, so partial recv/send
