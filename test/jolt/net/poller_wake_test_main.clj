@@ -557,14 +557,15 @@
 ;; --- leak and stress ----------------------------------------------------------
 
 ;; GetProcessHandleCount measures the resource, not an allocator position. A
-;; complete leak therefore adds one count per leaked SOCKET, independent of how
-;; Windows chooses numeric handle values. Keep a visible noise budget and refuse
-;; the oracle if it ever overlaps the modeled leak floor.
+;; systematic leak therefore adds at least one count per cycle, independent of
+;; how many handles that operation normally owns or how Windows chooses their
+;; numeric values. Keep a visible noise budget and refuse the oracle if it ever
+;; overlaps half of that minimum leak signal.
 (def ^:private observed-count-noise 10)
 
-(defn- check-no-leak! [label attempts handles-per-cycle before after]
+(defn- check-no-leak! [label attempts minimum-leaks-per-cycle before after]
   (let [signed (- after before)
-        leak-signal (* attempts handles-per-cycle)
+        leak-signal (* attempts minimum-leaks-per-cycle)
         leak-floor (quot leak-signal 2)]
     (c/check-pred
      (str label " (" attempts " cycles, before " before ", after " after
@@ -601,9 +602,10 @@
         (when (poller/close! p) (swap! closed inc))))
     (c/check "every poller in the loop was closed by its own close"
              attempts @closed)
-    ;; 2 wake sockets per poller.
+    ;; A poller owns two wake sockets, but the oracle must reject even if only
+    ;; one side leaks per cycle.
     (check-no-leak! "poller open/close cycles leak no handles"
-                    attempts 2 before (whc/current!)))
+                    attempts 1 before (whc/current!)))
 
   (c/section "w4: repeated accept construction and close leaks no handle")
   ;; `accept` builds and tears down its own poller, and therefore its own wake
@@ -620,9 +622,12 @@
             (net/close! server)
             (net/close! client)))))
     (c/check "every accept in the loop returned a socket" attempts @accepted)
-    ;; 2 wake sockets + the accepted socket + the client socket.
+    ;; Each cycle owns two wake sockets, the accepted socket, and the client
+    ;; socket. Use the minimum systematic defect -- one leaked handle/cycle --
+    ;; rather than allowing three of those four leaks to hide below a
+    ;; complete-cycle threshold.
     (check-no-leak! "accept cycles leak no handles"
-                    attempts 4 before (whc/current!))))
+                    attempts 1 before (whc/current!))))
 
 ;; --- entry point --------------------------------------------------------------
 
