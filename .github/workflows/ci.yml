@@ -142,7 +142,7 @@ jobs:
           echo "PROBE_FILE=tools/probed/$os-$arch.edn" >> "$GITHUB_ENV"
 
       - name: Upload probed ABI facts
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: abi-probe-${{ matrix.artifact }}
           # Upload only the file produced on this runner.  The checkout already
@@ -198,7 +198,7 @@ jobs:
       # other five, rather than living in a preview lane nothing gates on.
       - name: Upload probed ABI facts
         if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: abi-probe-windows-aarch64
           path: probed-arm64/windows-aarch64.edn
@@ -213,7 +213,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: abi-probe-*
           path: probed-artifacts
@@ -456,7 +456,7 @@ jobs:
 
       - name: Upload this platform's probed facts
         if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: probed-suite-${{ matrix.artifact }}
           path: jolt-net/tools/probed/*.edn
@@ -704,7 +704,7 @@ jobs:
 
       - name: Upload native Windows ARM64 runtime-lane ABI evidence
         if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: probed-runtime-windows-aarch64
           path: probed-arm64-runtime/windows-aarch64.edn
