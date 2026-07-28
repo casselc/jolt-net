@@ -813,11 +813,15 @@ The measurement has two complementary guards:
    handle, or counter that excludes sockets therefore fails rather than making
    every zero delta look healthy.
 2. The visible ambient-noise budget is 10 handles and must remain strictly
-   below the modeled leak floor. W2's 50 rollback attempts refuse at 25.
+   below the modeled leak floor. The measured absolute drift must stay within
+   that budget; a large negative drift therefore fails as inconclusive instead
+   of masking retained handles. W2's 50 rollback attempts have a leak floor of
+   25.
    W4 was subsequently strengthened at `c374738` to model the minimum systematic
    defect — **one** retained handle per cycle — rather than only a complete
-   operation leaking all of its owned handles. Its 60 poller cycles refuse at
-   30 and its 40 accept cycles refuse at 20.
+   operation leaking all of its owned handles. Its 60 poller cycles have a
+   leak floor of 30 and its 40 accept cycles a floor of 20; both still permit
+   only the explicit absolute-noise budget of 10.
 
 The first hosted correction run, revision `1090b3e`, [CI run
 30314204823](https://github.com/casselc/jolt-net/actions/runs/30314204823),

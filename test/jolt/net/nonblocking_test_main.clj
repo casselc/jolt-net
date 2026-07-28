@@ -413,9 +413,9 @@
         (c/check-pred
          (str attempts " failed initiations leak no handles (before "
               before ", after " after ", signed delta " signed-delta
-              ", a complete leak would add " leak-signal
-              ", refusing at " leak-floor ")")
-         #(< % leak-floor) signed-delta)
+              ", allowed absolute noise " noise-budget
+              ", a complete leak would add " leak-signal ")")
+         #(<= (abs %) noise-budget) signed-delta)
         (c/check-pred
          (str "the W2 handle-count oracle separates its noise budget "
               noise-budget " from leak floor " leak-floor)

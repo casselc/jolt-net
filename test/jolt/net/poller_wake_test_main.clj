@@ -569,9 +569,10 @@
         leak-floor (quot leak-signal 2)]
     (c/check-pred
      (str label " (" attempts " cycles, before " before ", after " after
-          ", signed delta " signed ", a real leak would add "
-          leak-signal ", refusing at " leak-floor ")")
-     #(< % leak-floor) signed)
+          ", signed delta " signed ", allowed absolute noise "
+          observed-count-noise ", a systematic leak would add at least "
+          leak-signal ")")
+     #(<= (abs %) observed-count-noise) signed)
     (c/check-pred
      (str label ": the oracle still separates noise from a leak (noise budget "
           observed-count-noise ", leak floor " leak-floor ")")
