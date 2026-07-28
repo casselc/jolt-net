@@ -42,6 +42,22 @@ If jolt-net were ever built on a branch predating `c71bc342`, loading it on Linu
 would fail while trying to resolve Winsock symbols. **No load-time assertion can
 detect this** — that is precisely what laziness removes — so it is recorded here.
 
+## Runtime substrate
+
+The fork pin above is one half of what CI reproduces; the Chez Scheme it runs on
+is the other. Every lane installs the shared immutable release
+`chez-ci-10.4.1.1` through `casselc/jolt-toolchains/setup-chez` (pinned at
+`095108ae32659757808064d004855092567d3ad3`), with a per-target archive SHA-256
+and the `source-runtime` capability. That recipe records the same Jolt commit
+this file pins, `46e1f74fc14f29283586900ef4b98c45375c0500`, so the runtime and
+the fork cannot drift apart silently.
+
+This matters for upstreaming in one specific way: `source-runtime` is the only
+capability jolt-net has ever needed. It does not link against the Chez kernel and
+requests none of the GNU kernel-development inputs, so moving these files into the
+stdlib does not carry a build-toolchain requirement with them.
+`docs/PLATFORM-COVERAGE.md` holds the digests and the cold/warm CI evidence.
+
 ## Deliberate departures from the design spike
 
 **Numeric address text is formatted in pure Clojure, not via `getnameinfo`.** The

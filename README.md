@@ -46,6 +46,16 @@ and no AOT image has been built or tested on Windows ARM64, and the property
 layer does not run there. `docs/PLATFORM-COVERAGE.md` states each of those
 claims separately, and is the file to read rather than this paragraph.
 
+All six CI lanes — Linux x86_64/aarch64, macOS arm64/x86_64, and Windows
+x86-64/aarch64 — run on the same immutable, checksum-pinned Chez Scheme release
+(`chez-ci-10.4.1.1`) installed through `casselc/jolt-toolchains/setup-chez`.
+Nothing builds Chez from source, each target's archive is pinned to an explicit
+SHA-256, and there is no source-build fallback: a digest mismatch fails the job.
+Every target is requested at the `source-runtime` capability only, which is the
+boundary of what this project claims — a runnable Chez and its boot files, not
+the Chez kernel-development inputs. `docs/PLATFORM-COVERAGE.md` records the
+digests and the cold/warm CI evidence.
+
 ## Non-blocking connect
 
 The substrate keeps connection policy above native socket ownership:

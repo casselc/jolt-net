@@ -21,12 +21,68 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 
 | Platform | Constants / layouts | Blocking socket base | Non-blocking I/O + poller/connect | Notes |
 |---|---|---|---|---|
-| Linux x86-64 | **probed** | **runtime** | **runtime** | The development and CI platform. Real `fcntl`, `poll`, pipe-wake, sliced byte I/O, EOF, non-blocking connect/`SO_ERROR`, mutation wake, and close races are exercised. |
-| Linux aarch64 | **probed** | **runtime** | **runtime** | The `ubuntu-24.04-arm` job diffs every freshly probed fact against the explicit x86-64 alias before running real sockets. Probe, blocking/non-blocking runtime, poller races, and required Hegel properties passed on revision `f0affc4` in CI run `30144054281`. |
-| Windows x86-64 | **probed** | **runtime** | **runtime** (byte I/O, connect, `WSAPoll` readiness, **and the public poller**) | W7.1 implementation revision `128d52a` ran all 13 jobs green in [CI run 30322768424](https://github.com/casselc/jolt-net/actions/runs/30322768424), including W1 184/184, W2 58/58, W3 124/124, and W4 74/74 with zero failures and zero skips. W2 and W4 now use `GetProcessHandleCount`, first prove that six deliberately open sockets raise the count, then require absolute process-count drift to remain within the explicit ten-handle noise budget. Separate guards keep that budget below the minimum modeled leak floors: 25 for W2, 30 for W4 pollers, and 20 for W4 accepts. W2 measured 134 → 134; W4 measured 135 → 135 over both 60 poller and 40 accept cycles. The `WSAPOLLFD` layout, flag values, and `WSAPoll` signature remain independently probed and byte-gated. Readiness covers read, write, error, hangup/EOF, deadlines, captured failure, connect completion, short reads, token rejection, the owner-independent datagram wake transport, completion-boundary close, and readiness-driven blocking accept. |
-| Windows aarch64 | **probed** | **runtime** | **runtime** (byte I/O, connect, `WSAPoll` readiness, **and the public poller**) | `tools/probed/windows-aarch64.edn` comes from an ARM64 MSVC probe executed on `windows-11-vs2026-arm`. The native `tarm64nt` lane runs the same four gates as x86-64, over real loopback sockets with AOT disabled. On W7.1 implementation revision `128d52a` in [CI run 30322768424](https://github.com/casselc/jolt-net/actions/runs/30322768424), it passed W1 184/184, W2 58/58, W3 124/124, and W4 74/74 with zero failures and zero skips. After the live six-socket non-vacuity check, W2 measured process handles 135 → 135 and W4 measured 136 → 136 over both stress loops; each absolute delta is checked against the same ten-handle budget and separated leak floors as x86-64. Every descriptor fact is byte-identical to the x86-64 column apart from `:arch`; that is a regenerated observation, not an inferred alias. This is source-runtime evidence only: no packaged `joltc` or AOT image was built or tested here. |
-| macOS arm64 | **probed** | **runtime** | **runtime** | The complete native suite passes with source-built Chez 10.4.1: variadic-ABI-correct `fcntl`, `poll(2)`, non-blocking connect/`SO_ERROR`, sliced byte I/O, SIGPIPE, close races, and the owner-independent self-pipe protocol, with Darwin's distinct 32-bit `nfds_t` binding. |
-| macOS x86-64 | **probed** | **runtime** | **runtime** | The live x86_64 probe is normalized only at the architecture label and diffed against the explicit shared-Darwin descriptor. Probe, full socket/poller runtime, source-built pinned libhegel, and required Hegel properties passed on revision `f0affc4` in CI run `30144054281`. |
+| Linux x86-64 | **probed** | **runtime** | **runtime** | The development and CI platform. Real `fcntl`, `poll`, pipe-wake, sliced byte I/O, EOF, non-blocking connect/`SO_ERROR`, mutation wake, and close races are exercised. Re-confirmed on the shared immutable Chez toolchain at revision `52523ed`: 270/270 with zero skips in both the cold run [30402636075](https://github.com/casselc/jolt-net/actions/runs/30402636075) and the warm run [30402994705](https://github.com/casselc/jolt-net/actions/runs/30402994705). |
+| Linux aarch64 | **probed** | **runtime** | **runtime** | The `ubuntu-24.04-arm` job diffs every freshly probed fact against the explicit x86-64 alias before running real sockets. Probe, blocking/non-blocking runtime, poller races, and required Hegel properties passed on revision `f0affc4` in CI run `30144054281`. Re-confirmed on the shared immutable Chez toolchain at revision `52523ed`: 270/270 with zero skips in both the cold run [30402636075](https://github.com/casselc/jolt-net/actions/runs/30402636075) and the warm run [30402994705](https://github.com/casselc/jolt-net/actions/runs/30402994705). |
+| Windows x86-64 | **probed** | **runtime** | **runtime** (byte I/O, connect, `WSAPoll` readiness, **and the public poller**) | W7.1 implementation revision `128d52a` ran all 13 jobs green in [CI run 30322768424](https://github.com/casselc/jolt-net/actions/runs/30322768424), including W1 184/184, W2 58/58, W3 124/124, and W4 74/74 with zero failures and zero skips. W2 and W4 now use `GetProcessHandleCount`, first prove that six deliberately open sockets raise the count, then require absolute process-count drift to remain within the explicit ten-handle noise budget. Separate guards keep that budget below the minimum modeled leak floors: 25 for W2, 30 for W4 pollers, and 20 for W4 accepts. W2 measured 134 → 134; W4 measured 135 → 135 over both 60 poller and 40 accept cycles. The `WSAPOLLFD` layout, flag values, and `WSAPoll` signature remain independently probed and byte-gated. Readiness covers read, write, error, hangup/EOF, deadlines, captured failure, connect completion, short reads, token rejection, the owner-independent datagram wake transport, completion-boundary close, and readiness-driven blocking accept. Re-confirmed on the shared immutable Chez toolchain at revision `52523ed` with identical counts (W1 184, W2 58, W3 124, W4 74, zero failures, zero skips) in both the cold run [30402636075](https://github.com/casselc/jolt-net/actions/runs/30402636075) and the warm run [30402994705](https://github.com/casselc/jolt-net/actions/runs/30402994705). |
+| Windows aarch64 | **probed** | **runtime** | **runtime** (byte I/O, connect, `WSAPoll` readiness, **and the public poller**) | `tools/probed/windows-aarch64.edn` comes from an ARM64 MSVC probe executed on `windows-11-vs2026-arm`. The native `tarm64nt` lane runs the same four gates as x86-64, over real loopback sockets with AOT disabled. On W7.1 implementation revision `128d52a` in [CI run 30322768424](https://github.com/casselc/jolt-net/actions/runs/30322768424), it passed W1 184/184, W2 58/58, W3 124/124, and W4 74/74 with zero failures and zero skips. After the live six-socket non-vacuity check, W2 measured process handles 135 → 135 and W4 measured 136 → 136 over both stress loops; each absolute delta is checked against the same ten-handle budget and separated leak floors as x86-64. Every descriptor fact is byte-identical to the x86-64 column apart from `:arch`; that is a regenerated observation, not an inferred alias. This is source-runtime evidence only: no packaged `joltc` or AOT image was built or tested here. Re-confirmed on the shared immutable Chez toolchain at revision `52523ed` with identical counts (W1 184, W2 58, W3 124, W4 74, zero failures, zero skips) in both the cold run [30402636075](https://github.com/casselc/jolt-net/actions/runs/30402636075) and the warm run [30402994705](https://github.com/casselc/jolt-net/actions/runs/30402994705). |
+| macOS arm64 | **probed** | **runtime** | **runtime** | The complete native suite passes on official Chez 10.4.1: variadic-ABI-correct `fcntl`, `poll(2)`, non-blocking connect/`SO_ERROR`, sliced byte I/O, SIGPIPE, close races, and the owner-independent self-pipe protocol, with Darwin's distinct 32-bit `nfds_t` binding. Re-confirmed on the shared immutable Chez toolchain at revision `52523ed`: 270/270 with zero skips in both the cold run [30402636075](https://github.com/casselc/jolt-net/actions/runs/30402636075) and the warm run [30402994705](https://github.com/casselc/jolt-net/actions/runs/30402994705). |
+| macOS x86-64 | **probed** | **runtime** | **runtime** | The live x86_64 probe is normalized only at the architecture label and diffed against the explicit shared-Darwin descriptor. Probe, full socket/poller runtime, source-built pinned libhegel, and required Hegel properties passed on revision `f0affc4` in CI run `30144054281`. Re-confirmed on the shared immutable Chez toolchain at revision `52523ed`: 270/270 with zero skips in both the cold run [30402636075](https://github.com/casselc/jolt-net/actions/runs/30402636075) and the warm run [30402994705](https://github.com/casselc/jolt-net/actions/runs/30402994705). |
+
+## Where the runtime substrate comes from
+
+Every one of the six lanes above installs the **same** immutable, checksum-pinned
+Chez Scheme release — `chez-ci-10.4.1.1` — through
+`casselc/jolt-toolchains/setup-chez`, pinned by full commit SHA
+(`095108ae32659757808064d004855092567d3ad3`) and requested with an explicit
+per-target archive SHA-256:
+
+| Target | Archive SHA-256 |
+|---|---|
+| `linux-x86_64` | `16476cd98fb5cb2e2c0285e88fcd6d57ade9392ca8d7cf603ca38432b4118526` |
+| `linux-aarch64` | `b5b2306d3d6468b5fc7d5836721b09c704c7750f887a6232f1aeeb567d55f5d9` |
+| `macos-arm64` | `d5b5a504eed1e0f117b4a3dd23ad0030bb3e5c0da6d6b9d9f990f5f2fa32478f` |
+| `macos-x86_64` | `e4577ad71b1f1e1062c361fa612af60d75378e64dc2869d8c8eefd3d7efdbc62` |
+| `windows-x86_64` | `360c60496eea2f8aab0e557eb77e9e18b315bb9181938158ae57655aa541b7f8` |
+| `windows-arm64` | `9bc28462823a1447de6d849e129758a6317cc9deafb8e87414817e7244f149c8` |
+
+No lane builds Chez from source any more. The action verifies the archive digest,
+its release descriptor, its internal manifest, the extracted file inventory, and
+the requested capability before it exports an executable, and **there is
+deliberately no source-build fallback** — a digest mismatch fails the job rather
+than quietly reverting to a slow green run that proves something else.
+
+### The `source-runtime` boundary
+
+All six targets are requested at exactly one capability: **`source-runtime`**.
+That asserts a runnable Chez plus its boot files, which is the whole of what
+jolt-net needs — the suites are Clojure-on-Chez run through the source Jolt
+launcher. It deliberately does **not** claim the GNU kernel-development inputs
+(`scheme.h`, `libkernel.a`, a `cc` shim), because nothing in this repository
+links against the Chez kernel. Packaged `joltc`, AOT images, and anything else
+above source mode remain outside every claim in this file, on **all six**
+platforms and not only on Windows ARM64.
+
+Installing a prebuilt Chez removes no architecture evidence on the ARM64 lanes.
+Witnesses 4 and 5 in the table below are applied to the **shipped** `scheme.exe`
+on the runner itself, so an x86-64 image published under the ARM64 target name
+fails the PE-machine and `(machine-type)` checks instead of running under
+emulation.
+
+### Cold and warm evidence
+
+Both runs below are the same branch and the same revision `52523ed`, and both
+were fully green across all 13 jobs.
+
+| Run | Toolchain cache | Result | Wall clock |
+|---|---|---|---|
+| [30402636075](https://github.com/casselc/jolt-net/actions/runs/30402636075) | **cold** — `Cache not found` for all six exact archive keys, no source-build fallback | 13/13 green | 4 m 35 s |
+| [30402994705](https://github.com/casselc/jolt-net/actions/runs/30402994705) | **warm** — `Cache restored from key` for all six targets, zero misses | 13/13 green | 2 m 11 s |
+
+Counts were identical on both runs: **270 passed / 0 failed / 0 skipped** on each
+of the four POSIX lanes (with `JOLT_HEGEL_REQUIRED=1` and 6 properties /
+6 assertions), and **W1 184, W2 58, W3 124, W4 74**, all zero-failure and
+zero-skip, on *both* Windows architectures. Neither run emitted a Node.js 20
+deprecation warning from any action.
 
 ## Specific residuals
 
@@ -250,9 +306,8 @@ The table test is non-vacuous: corrupting `AF_INET6` or swapping
 
 ## Making this better
 
-Task W5 closed the Windows x86-64 gap. CI source-builds official Chez 10.4.1
-under MSYS2 MINGW64 and runs all four gates — W1, W2, W3, and the W4 public
-poller — through direct PowerShell/Chez on Windows x86-64. Every step must
+Task W5 closed the Windows x86-64 gap. CI runs all four gates — W1, W2, W3, and
+the W4 public poller — through direct PowerShell/Chez on Windows x86-64. Every step must
 observe a real child process exit code: a step that cannot see one now fails
 rather than reporting green, because in a fresh step process `$LASTEXITCODE` can
 be unset and `exit $null` exits 0.
