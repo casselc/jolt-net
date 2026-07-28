@@ -838,9 +838,10 @@ On x86-64 W2 measured 134 → 134, W4 pollers 135 → 135, and W4 accepts
 135 → 135. On ARM64 the corresponding measurements were 135 → 135,
 136 → 136, and 136 → 136. Every delta was zero; both runs first observed the
 six deliberately open sockets. The stronger one-handle-per-cycle thresholds
-retain the same assertion counts. Revision `8681535` then passed all 13 jobs in
+retain the same assertion counts. Implementation revision `128d52a` then passed
+all 13 jobs in
 [CI run
-30322347132](https://github.com/casselc/jolt-net/actions/runs/30322347132),
+30322768424](https://github.com/casselc/jolt-net/actions/runs/30322768424),
 including those stronger thresholds on both Windows architectures and all four
 POSIX runtime suites against the publicly mirrored v0.5.7 Hegel integration.
 
