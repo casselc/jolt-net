@@ -65,6 +65,10 @@ permissions:
   contents: read
 
 env:
+  # One reviewed proposal-fork revision for every source-mode lane. Keep this
+  # centralized so a platform cannot silently validate against a different
+  # core.
+  JOLT_CORE_SHA: b921991e532ce2555d947bf88bc0464bf0c89d27
   # One immutable toolchain release for all six targets. The per-target archive
   # digests live next to each target below so a wrong pairing cannot pass.
   CHEZ_RELEASE_TAG: chez-ci-10.4.1.1
@@ -302,7 +306,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
         with:
           repository: casselc/jolt
-          ref: 46e1f74fc14f29283586900ef4b98c45375c0500
+          ref: ${{ env.JOLT_CORE_SHA }}
           submodules: recursive
           path: jolt-upstream
 
@@ -522,7 +526,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
         with:
           repository: casselc/jolt
-          ref: 46e1f74fc14f29283586900ef4b98c45375c0500
+          ref: ${{ env.JOLT_CORE_SHA }}
           submodules: recursive
           path: jolt-upstream
 
@@ -748,7 +752,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
         with:
           repository: casselc/jolt
-          ref: 46e1f74fc14f29283586900ef4b98c45375c0500
+          ref: ${{ env.JOLT_CORE_SHA }}
           submodules: recursive
           path: jolt-upstream
 
