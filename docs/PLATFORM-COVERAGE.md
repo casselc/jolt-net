@@ -28,6 +28,26 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 | macOS arm64 | **probed** | **runtime** | **runtime** | The complete native suite passes on official Chez 10.4.1: variadic-ABI-correct `fcntl`, `poll(2)`, non-blocking connect/`SO_ERROR`, sliced byte I/O, SIGPIPE, close races, and the owner-independent self-pipe protocol, with Darwin's distinct 32-bit `nfds_t` binding. Re-confirmed on the shared immutable Chez toolchain at revision `52523ed`: 270/270 with zero skips in both the cold run [30402636075](https://github.com/casselc/jolt-net/actions/runs/30402636075) and the warm run [30402994705](https://github.com/casselc/jolt-net/actions/runs/30402994705). |
 | macOS x86-64 | **probed** | **runtime** | **runtime** | The live x86_64 probe is normalized only at the architecture label and diffed against the explicit shared-Darwin descriptor. Probe, full socket/poller runtime, source-built pinned libhegel, and required Hegel properties passed on revision `f0affc4` in CI run `30144054281`. Re-confirmed on the shared immutable Chez toolchain at revision `52523ed`: 270/270 with zero skips in both the cold run [30402636075](https://github.com/casselc/jolt-net/actions/runs/30402636075) and the warm run [30402994705](https://github.com/casselc/jolt-net/actions/runs/30402994705). |
 
+### Jolt v0.5.10 checkpoint
+
+Revision `3b83e53f275f5087f9948b9fef445546fe773eb5` repins the
+proposal runtime to `b921991e532ce2555d947bf88bc0464bf0c89d27`, the reviewed
+fork tip rebased over upstream Jolt v0.5.10. Hosted
+[run 30417957034](https://github.com/casselc/jolt-net/actions/runs/30417957034)
+passed all 13 jobs:
+
+- each POSIX target passed 270 runtime checks with zero failures or skips plus
+  the required six Hegel properties;
+- Windows x86-64 and aarch64 each passed W1 184, W2 58, W3 124, and W4 74,
+  all with zero failures or skips; and
+- all six native ABI probes matched the committed descriptor tables.
+
+`src/`, tests, proof models, descriptors, and native semantics are byte-identical
+to the preceding shared-toolchain checkpoint. Local revalidation additionally
+reproduced all 51 SMT verdicts (18 UNSAT corrected models and 33 SAT controls).
+This is a dependency-integration checkpoint, so it needs no architecture-specific
+duplicate proof.
+
 ## Where the runtime substrate comes from
 
 Every one of the six lanes above installs the **same** immutable, checksum-pinned
