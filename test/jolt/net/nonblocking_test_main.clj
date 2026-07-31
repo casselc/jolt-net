@@ -436,15 +436,12 @@
 (defn- run-suite! []
   (println "jolt-net non-blocking suite (dependency-free, no poller)")
   (println (str "target: " (jolt.host/target)))
-  (println (str "errno-source: " (jolt.ffi/errno-source)))
   (println (str "transition postcondition: " (nb/postcondition-kind)))
 
   (c/section "scaffold")
   (c/check-pred "jolt.host/target resolves an os"
                 #(contains? #{:linux :darwin :windows} %)
                 (:os (jolt.host/target)))
-  (c/check-pred "fork prerequisite: jolt.ffi/errno is available"
-                some? (jolt.ffi/errno-source))
   (c/check-pred "fork prerequisite: a real monotonic clock bounds these waits"
                 #(= :monotonic %) (jolt.host/monotonic-source))
 

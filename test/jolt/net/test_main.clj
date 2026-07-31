@@ -17,7 +17,6 @@
 (defn -main [& _]
   (println "jolt-net test suite")
   (println (str "target: " (jolt.host/target)))
-  (println (str "errno-source: " (jolt.ffi/errno-source)))
   (println (str "monotonic-source: " (jolt.host/monotonic-source)))
 
   (c/section "scaffold")
@@ -30,8 +29,6 @@
   (c/check-pred "jolt.host/target reports pointer width"
                 #(or (= 32 %) (= 64 %))
                 (:pointer-bits (jolt.host/target)))
-  (c/check-pred "fork prerequisite: jolt.ffi/errno is available"
-                some? (jolt.ffi/errno-source))
   (c/check-pred "fork prerequisite: a real monotonic clock backs deadlines"
                 #(= :monotonic %) (jolt.host/monotonic-source))
   (c/check-pred "fork prerequisite: 16-bit foreign types exist"

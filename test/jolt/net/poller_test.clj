@@ -2,7 +2,6 @@
   "Real POSIX non-blocking I/O and poller lifecycle checks."
   (:require [jolt.net :as net]
             [jolt.net.check :as c]
-            [jolt.net.error :as err]
             [jolt.net.ffi :as nffi]
             [jolt.net.handle :as h]
             [jolt.net.nonblocking :as nb]
@@ -165,24 +164,17 @@
   (let [poll-once @#'poller/poll-once
         expected (get-in (net/target-descriptor) [:errno :eintr])
         invoked (atom nil)
-        separate-capture? (atom false)
         observed
         (with-redefs
          [nffi/invoke-captured
           (fn [op & args]
             (reset! invoked [op args])
-            [-1 expected])
-          err/capture
-          (fn []
-            (reset! separate-capture? true)
-            999999)]
+            [-1 expected])]
           (poll-once {} nil 3 25))]
     (c/check "poll-once dispatches through the captured call table"
              [:poll [nil 3 25]] @invoked)
     (c/check "poll-once preserves the code paired with the failed result"
-             {:result -1 :code expected} observed)
-    (c/check "poll-once performs no separate post-call error read"
-             false @separate-capture?))
+             {:result -1 :code expected} observed))
 
   (c/section "non-blocking connect decision contract")
   (let [decide @#'net/connect-initiation-status

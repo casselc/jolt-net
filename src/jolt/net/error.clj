@@ -33,16 +33,6 @@
 (defn in-progress? [x] (= x ::in-progress))
 (defn connected? [x] (= x ::connected))
 
-;; --- capture ----------------------------------------------------------------
-(defn capture
-  "This thread's last native error code, RIGHT NOW.
-
-  This is a diagnostic/legacy accessor, not a sound way to classify a foreign
-  failure sentinel: runtime return work may already have disturbed the slot.
-  Correct native consumers use an atomic captured pair."
-  []
-  (ffi/errno))
-
 ;; --- classification ---------------------------------------------------------
 ;; The kind set is deliberately small and closed (per the accepted design). It
 ;; exists so callers can branch on the handful of outcomes worth branching on;
@@ -122,41 +112,15 @@
                    :jolt.net/kind :invalid
                    :jolt.net/platform platform
                    :jolt.net/message msg}
-                  ctx)))
-
-;; --- the ordering combinator ------------------------------------------------
-(defn checked
-  "Run `thunk`; if `fail?` says its result is a failure, read the current native
-  error immediately and throw.
-
-  This preserves ordering only for a thunk whose contract already guarantees
-  that no runtime/FFI return work can clobber the slot. jolt-net does not use it
-  for sentinel-returning foreign bindings; use `checked-captured` for those.
-  If used with such a pre-established thunk, rollback still belongs in
-  catch/finally after the read:
-
-      (let [h (checked :socket invalid? #(...) ctx)]
-        (try (checked :bind neg? #(...) ctx)
-             (transfer-ownership h)
-             (catch :default e (raw-close! h) (throw e))))
-
-  `ctx` must be an already-evaluated value, never an expression containing a
-  native call."
-  ([op fail? thunk] (checked op fail? thunk nil))
-  ([op fail? thunk ctx]
-   (let [r (thunk)]
-     (if (fail? r)
-       (let [code (capture)]        ;; nothing may be interposed here
-         (throw (native-ex op code ctx)))
-       r))))
+                   ctx)))
 
 (defn checked-captured
   "Interpret an atomic `[native-result native-error]` pair.
 
-  Unlike `checked`, this function never reads the thread's current native-error
-  slot: the matching code was captured inside the foreign return transition,
-  before later runtime or native work. The second element is ignored on success
-  because native APIs do not promise to clear stale error state."
+  This function never reads the thread's current native-error slot: the matching
+  code was captured inside the foreign return transition, before later runtime
+  or native work. The second element is ignored on success because native APIs
+  do not promise to clear stale error state."
   ([op fail? captured] (checked-captured op fail? captured nil))
   ([op fail? captured ctx]
    (let [[result code] captured]

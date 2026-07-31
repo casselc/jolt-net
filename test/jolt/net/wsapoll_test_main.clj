@@ -676,7 +676,6 @@
 (defn- run-suite! []
   (println "jolt-net WSAPoll readiness suite (dependency-free, task W3)")
   (println (str "target: " (jolt.host/target)))
-  (println (str "errno-source: " (jolt.ffi/errno-source)))
   (println (str "readiness backend: " (:kind r/backend)))
   (println (str "wake transport: " (pr-str (r/wake-transport))))
 
