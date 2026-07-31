@@ -443,7 +443,7 @@
                 #(contains? #{:linux :darwin :windows} %)
                 (:os (jolt.host/target)))
   (c/check-pred "fork prerequisite: a real monotonic clock bounds these waits"
-                #(= :monotonic %) (jolt.host/monotonic-source))
+                #(= :chez-time-monotonic %) (jolt.host/monotonic-source))
 
   (transition-facts!)
   (captured-dispatch-facts!)

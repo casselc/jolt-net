@@ -30,7 +30,7 @@
                 #(or (= 32 %) (= 64 %))
                 (:pointer-bits (jolt.host/target)))
   (c/check-pred "fork prerequisite: a real monotonic clock backs deadlines"
-                #(= :monotonic %) (jolt.host/monotonic-source))
+                #(= :chez-time-monotonic %) (jolt.host/monotonic-source))
   (c/check-pred "fork prerequisite: 16-bit foreign types exist"
                 #(= 2 %) (jolt.ffi/sizeof :uint16))
 

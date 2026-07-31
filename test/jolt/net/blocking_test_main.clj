@@ -263,7 +263,7 @@
                 #(or (= 32 %) (= 64 %))
                 (:pointer-bits (jolt.host/target)))
   (c/check-pred "fork prerequisite: a real monotonic clock backs deadlines"
-                #(= :monotonic %) (jolt.host/monotonic-source))
+                #(= :chez-time-monotonic %) (jolt.host/monotonic-source))
 
   ;; Must run before target/address/resolver/socket tests: those namespaces
   ;; call resolve/listen/connect, which would otherwise consume the "first

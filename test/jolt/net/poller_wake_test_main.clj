@@ -641,7 +641,7 @@
 
   (c/section "scaffold")
   (c/check-pred "fork prerequisite: a real monotonic clock bounds these waits"
-                #(= :monotonic %) (jolt.host/monotonic-source))
+                #(= :chez-time-monotonic %) (jolt.host/monotonic-source))
 
   (if-not (windows?)
     ;; This is the WINDOWS gate. The equivalent POSIX coverage is the full
