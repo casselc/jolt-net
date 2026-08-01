@@ -48,6 +48,38 @@ reproduced all 51 SMT verdicts (18 UNSAT corrected models and 33 SAT controls).
 This is a dependency-integration checkpoint, so it needs no architecture-specific
 duplicate proof.
 
+### Jolt v0.5.12 checkpoint
+
+Integration revision `3f087c53c603c3f8245683feba449bf74a470651`
+repins every source lane and the local launcher to the validated proposal core
+`757389df094fa9afb7fa1f1eba5ba83ab297f1a4`, based on released upstream Jolt
+v0.5.12. The repin changes no `src/`, test, descriptor, or proof-model file.
+
+Local Linux x86-64 revalidation with Chez 10.4.1 and isolated writable state
+produced:
+
+- a fresh native ABI probe byte-identical to
+  `tools/probed/linux-x86-64.edn`;
+- 179 passing blocking checks and one explicit POSIX-only WSAStartup skip;
+- 52/52 non-blocking checks; and
+- 267/267 full-suite checks, including all 6 required Hegel properties and
+  their 6 assertions.
+
+The same two exact revisions were copied to fresh Windows-visible staging
+directories and run with native x86-64 Chez 10.4.1 over real Winsock loopback.
+The four dependency-free gates passed with zero failures and zero skips:
+
+- W1 blocking: 183/183;
+- W2 non-blocking: 57/57, process handles 124 before and after its leak loop;
+- W3 WSAPoll: 124/124; and
+- W4 public poller/wake: 74/74, process handles 125 before and after both the
+  60-poller and 40-accept stress loops.
+
+This is local Linux x86-64 and native Windows x86-64 evidence. It does not claim
+a hosted run or fresh validation of Linux aarch64, either macOS architecture,
+or Windows aarch64 at this exact pin; the earlier hosted checkpoints above
+remain the evidence for those targets until the repinned workflow runs.
+
 ## Where the runtime substrate comes from
 
 Every one of the six lanes above installs the **same** immutable, checksum-pinned
