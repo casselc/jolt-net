@@ -82,15 +82,14 @@ Ownership transfers with both `net/connected` and `net/in-progress`; neither
 
 ## Requirements
 
-**jolt-net does not build on upstream Jolt v0.5.10.** It currently pins the
-reviewed, rebased `casselc/jolt` proposal fork at
-`b921991e532ce2555d947bf88bc0464bf0c89d27` on
-`codex/upstream-rebase-v0.5.10` and depends on seven primitives retained
-there:
+**jolt-net does not build on released upstream Jolt v0.5.12.** It currently
+pins the reviewed local proposal fork at
+`757389df094fa9afb7fa1f1eba5ba83ab297f1a4` on
+`codex/upstream-rebase-v0.5.12-candidate` and depends on six shared host/FFI
+features retained there:
 
 - `(jolt.host/target)` — the target descriptor, for fail-closed platform tables;
 - `jolt.host/monotonic-nanos` — a real monotonic source for deadlines;
-- `jolt.ffi/errno` — immediate native error capture;
 - `:int16` / `:uint16` foreign types — `sockaddr` fields are 16-bit;
 - `jolt.ffi/with-byte-array-pointer` — a scoped, pinned pointer to any validated
   array slice, so partial reads and writes do not allocate or copy.
@@ -101,6 +100,9 @@ there:
   result and its matching `errno`/Windows last-error value as one pair before a
   return-boundary action, lazy resolution, cleanup, or another foreign call can
   clobber the error slot.
+
+The driver no longer consumes ambient `jolt.ffi/errno`; every failure sentinel
+whose error matters uses the atomically captured pair above.
 
 Run everything through `bin/jnc`, which pins the fork and fails with a readable
 message rather than an unbound-var error:

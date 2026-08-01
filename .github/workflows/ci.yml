@@ -65,10 +65,10 @@ permissions:
   contents: read
 
 env:
-  # One reviewed proposal-fork revision for every source-mode lane. Keep this
-  # centralized so a platform cannot silently validate against a different
-  # core.
-  JOLT_CORE_SHA: b921991e532ce2555d947bf88bc0464bf0c89d27
+  # One reviewed v0.5.12 proposal-fork revision for every source-mode lane.
+  # Keep this centralized so a platform cannot silently validate against a
+  # different core.
+  JOLT_CORE_SHA: 757389df094fa9afb7fa1f1eba5ba83ab297f1a4
   # One immutable toolchain release for all six targets. The per-target archive
   # digests live next to each target below so a wrong pairing cannot pass.
   CHEZ_RELEASE_TAG: chez-ci-10.4.1.1
@@ -300,8 +300,9 @@ jobs:
         with:
           path: jolt-net
 
-      # The fork carries the seven primitives jolt-net is built on. Submodules
-      # are required: the runtime will not load without vendor/irregex et al.
+      # The fork carries the six shared host/FFI features jolt-net is built on.
+      # Submodules are required: the runtime will not load without vendor/irregex
+      # et al.
       - name: Checkout the jolt fork
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
         with:
