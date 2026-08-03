@@ -253,7 +253,7 @@
 (defn- run-suite! []
   (println "jolt-net blocking-only suite (dependency-free)")
   (println (str "target: " (jolt.host/target)))
-  (println (str "monotonic-source: " (jolt.host/monotonic-source)))
+  (println "monotonic-clock: jolt.host/mono-nanos")
 
   (c/section "scaffold")
   (c/check-pred "jolt.host/target resolves an os"
@@ -262,8 +262,7 @@
   (c/check-pred "jolt.host/target reports pointer width"
                 #(or (= 32 %) (= 64 %))
                 (:pointer-bits (jolt.host/target)))
-  (c/check-pred "fork prerequisite: a real monotonic clock backs deadlines"
-                #(= :chez-time-monotonic %) (jolt.host/monotonic-source))
+  (c/monotonic-clock-facts!)
 
   ;; Must run before target/address/resolver/socket tests: those namespaces
   ;; call resolve/listen/connect, which would otherwise consume the "first

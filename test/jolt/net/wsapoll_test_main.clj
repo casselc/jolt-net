@@ -40,8 +40,8 @@
 (def ^:private connect-budget-ms 20000)
 (def ^:private io-budget-ms 5000)
 
-(defn- deadline-ns [ms] (+ (jolt.host/monotonic-nanos) (* ms 1000000)))
-(defn- expired? [deadline] (< deadline (jolt.host/monotonic-nanos)))
+(defn- deadline-ns [ms] (+ (jolt.host/mono-nanos) (* ms 1000000)))
+(defn- expired? [deadline] (< deadline (jolt.host/mono-nanos)))
 
 ;; --- low-level single-handle readiness --------------------------------------
 ;; Deliberately bypasses the registration machinery: these cases are about the
@@ -65,7 +65,7 @@
   [raw interests budget-ms pred]
   (let [deadline (deadline-ns budget-ms)]
     (loop []
-      (let [remaining (- deadline (jolt.host/monotonic-nanos))]
+      (let [remaining (- deadline (jolt.host/mono-nanos))]
         (if (neg? remaining)
           timeout-token
           (let [slice (min 1000 (quot (+ remaining 999999) 1000000))
@@ -680,8 +680,7 @@
   (println (str "wake transport: " (pr-str (r/wake-transport))))
 
   (c/section "scaffold")
-  (c/check-pred "fork prerequisite: a real monotonic clock bounds these waits"
-                #(= :chez-time-monotonic %) (jolt.host/monotonic-source))
+  (c/monotonic-clock-facts!)
 
   (if-not (windows?)
     ;; This suite is about the Windows readiness backend. Running it elsewhere

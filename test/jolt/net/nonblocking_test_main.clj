@@ -33,8 +33,8 @@
 (def ^:private suite-timeout-ms 60000)
 (def ^:private timeout-token ::timeout)
 
-(defn- deadline-ns [ms] (+ (jolt.host/monotonic-nanos) (* ms 1000000)))
-(defn- expired? [deadline] (< deadline (jolt.host/monotonic-nanos)))
+(defn- deadline-ns [ms] (+ (jolt.host/mono-nanos) (* ms 1000000)))
+(defn- expired? [deadline] (< deadline (jolt.host/mono-nanos)))
 
 ;; --- probed transition facts ------------------------------------------------
 (defn- transition-facts! []
@@ -442,8 +442,7 @@
   (c/check-pred "jolt.host/target resolves an os"
                 #(contains? #{:linux :darwin :windows} %)
                 (:os (jolt.host/target)))
-  (c/check-pred "fork prerequisite: a real monotonic clock bounds these waits"
-                #(= :chez-time-monotonic %) (jolt.host/monotonic-source))
+  (c/monotonic-clock-facts!)
 
   (transition-facts!)
   (captured-dispatch-facts!)

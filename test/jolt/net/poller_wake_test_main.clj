@@ -61,8 +61,8 @@
 ;; false negative here only weakens the test, never fakes a pass.
 (def ^:private blocked-probe-ms 250)
 
-(defn- deadline-ns [ms] (+ (jolt.host/monotonic-nanos) (* ms 1000000)))
-(defn- expired? [deadline] (< deadline (jolt.host/monotonic-nanos)))
+(defn- deadline-ns [ms] (+ (jolt.host/mono-nanos) (* ms 1000000)))
+(defn- expired? [deadline] (< deadline (jolt.host/mono-nanos)))
 
 (defn- spin-until!
   "Busy-wait on an atomic predicate until it holds, or the budget expires.
@@ -688,8 +688,7 @@
   (println (str "terminal wake: " (pr-str wake/terminal-wake)))
 
   (c/section "scaffold")
-  (c/check-pred "fork prerequisite: a real monotonic clock bounds these waits"
-                #(= :chez-time-monotonic %) (jolt.host/monotonic-source))
+  (c/monotonic-clock-facts!)
 
   (if-not (windows?)
     ;; This is the WINDOWS gate. The equivalent POSIX coverage is the full

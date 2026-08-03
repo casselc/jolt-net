@@ -17,11 +17,11 @@
 (defn -main [& _]
   (println "jolt-net test suite")
   (println (str "target: " (jolt.host/target)))
-  (println (str "monotonic-source: " (jolt.host/monotonic-source)))
+  (println "monotonic-clock: jolt.host/mono-nanos")
 
   (c/section "scaffold")
-  ;; The scaffold's own gate: prove we are running on the fork, not stock joltc.
-  ;; Every later namespace depends on these three, so failing here first gives a
+  ;; The scaffold's own gate: prove we are running on the required core. Every
+  ;; later namespace depends on these contracts, so failing here first gives a
   ;; readable diagnosis instead of an unbound-var deep in a socket call.
   (c/check-pred "jolt.host/target resolves an os"
                 #(contains? #{:linux :darwin :windows} %)
@@ -29,8 +29,7 @@
   (c/check-pred "jolt.host/target reports pointer width"
                 #(or (= 32 %) (= 64 %))
                 (:pointer-bits (jolt.host/target)))
-  (c/check-pred "fork prerequisite: a real monotonic clock backs deadlines"
-                #(= :chez-time-monotonic %) (jolt.host/monotonic-source))
+  (c/monotonic-clock-facts!)
   (c/check-pred "fork prerequisite: 16-bit foreign types exist"
                 #(= 2 %) (jolt.ffi/sizeof :uint16))
 

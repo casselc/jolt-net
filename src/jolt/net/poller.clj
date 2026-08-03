@@ -734,7 +734,7 @@
   [poller]
   (if-let [clock (:jolt.net/monotonic-nanos poller)]
     (clock)
-    (jolt.host/monotonic-nanos)))
+    (jolt.host/mono-nanos)))
 
 (defn- native-wait!
   "Drive the native readiness wait against ONE caller-owned absolute monotonic

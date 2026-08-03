@@ -68,6 +68,28 @@
   (println)
   (println (str "-- " title " " (apply str (repeat (max 0 (- 68 (count title))) \-)))))
 
+(defn monotonic-clock-facts!
+  "Check the public upstream clock contract used by every deadline in jolt-net.
+
+  The API intentionally exposes nanoseconds from an arbitrary origin, not an
+  implementation/source identifier.  Keep these checks behavioral so a valid
+  upstream clock implementation can change without forcing jolt-net to know its
+  private name."
+  []
+  (let [a (jolt.host/mono-nanos)
+        b (jolt.host/mono-nanos)]
+    (check-pred "jolt.host/mono-nanos returns an exact integer" integer? a)
+    (check-pred "jolt.host/mono-nanos is nondecreasing" #(>= % a) b)
+    ;; This is the same discriminator used by Jolt's own telemetry gate.  It
+    ;; rules out the former currentTimeMillis*1e6 implementation while avoiding
+    ;; any assertion about Chez's private clock-source identity.
+    (check-pred
+     "jolt.host/mono-nanos is not millisecond-truncated"
+     identity
+     (some (fn [_]
+             (pos? (rem (jolt.host/mono-nanos) 1000000)))
+           (range 200)))))
+
 (defn summary
   "Print the roll-up. Returns the process exit code."
   []
