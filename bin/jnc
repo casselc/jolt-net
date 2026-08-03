@@ -1,8 +1,9 @@
 #!/bin/sh
 # jnc — run jolt-net against the local jolt fork.
 #
-# jolt-net cannot be built by upstream Jolt v0.5.12: it needs the fork's target,
-# clock, atomic native-error, 16-bit-type, and scoped array-slice primitives.
+# jolt-net cannot be built by plain upstream Jolt v0.5.20: it needs the fork's
+# target, atomic native-error, 16-bit-type, scoped array-slice, and variadic ABI
+# primitives.
 # A bare upstream `jolt` on PATH would fail with an unbound-var error far from
 # the cause,
 # so this wrapper pins the fork and says so plainly if it is missing.
@@ -27,12 +28,12 @@ if [ -n "${JOLT_UPSTREAM:-}" ]; then
         exit 1
     fi
 else
-    # Otherwise use the one canonical v0.5.12-candidate rebase worktree. Older
+    # Otherwise use the one canonical v0.5.20 rebase worktree. Older
     # proposal worktrees and the plain upstream checkout do not satisfy this
     # branch's exact host/FFI contract; selecting one merely because it has bin/jolt
     # would turn a stale checkout into a misleading partial success.
     for candidate in \
-        /home/chuck/ai-src/worktrees/jolt-upstream-rebase-v0.5.12-candidate
+        /home/chuck/ai-src/worktrees/jolt-upstream-rebase-v0.5.20
     do
         if [ -x "$candidate/bin/jolt" ]; then
             JOLT_UPSTREAM="$candidate"
@@ -49,7 +50,7 @@ fi
 if [ ! -x "${JOLT_BIN:-}" ]; then
     echo "jnc: could not find a jolt fork checkout with bin/jolt." >&2
     echo "jnc: jolt-net requires the local fork's host/FFI primitives on branch" >&2
-    echo "     codex/upstream-rebase-v0.5.12-candidate. Upstream Jolt v0.5.12" >&2
+    echo "     codex/upstream-rebase-v0.5.20. Plain upstream Jolt v0.5.20" >&2
     echo "     cannot load this library. Set JOLT_UPSTREAM to the checkout." >&2
     echo "     See docs/UPSTREAM-NOTES.md." >&2
     exit 1

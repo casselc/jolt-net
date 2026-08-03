@@ -6,23 +6,23 @@ accepted design spike.
 
 ## Fork prerequisites
 
-jolt-net cannot load on released upstream Jolt v0.5.12. It requires six shared
-host/FFI features retained on fork branch
-`codex/upstream-rebase-v0.5.12-candidate`, currently pinned at
-`757389df094fa9afb7fa1f1eba5ba83ab297f1a4`:
+jolt-net targets upstream Jolt v0.5.20 semantics and uses its public
+`jolt.host/mono-nanos` clock for deadlines. The clock is no longer a fork
+prerequisite. Five additional shared host/FFI features remain on fork branch
+`codex/upstream-rebase-v0.5.20`, currently pinned at
+`9fc64f93eba8b56a319f91bb1a322e2efced9c70`:
 
 | Primitive | Commit | Why jolt-net needs it |
 |---|---|---|
-| `jolt.host/target` | `970c4e39` | Select exact fail-closed ABI facts instead of inferring them from the build host. |
-| `jolt.host/monotonic-nanos`, `System/nanoTime` over a real monotonic clock | `5080780e` | Deadlines. The previous `nanoTime` was `currentTimeMillis * 1e6` — wall-clock and millisecond-truncated, so it could step backwards and could not resolve a sub-millisecond interval at all. |
-| `:int16` / `:uint16` / `:short` / `:ushort` foreign types | `9699dc9a` | `sockaddr_in.sin_family` and the `sockaddr_in6` fields are 16-bit. Without them the only option was the endian-dependent short-packing hack in `teensyp.ffi-net`. |
-| `jolt.ffi/with-byte-array-pointer` | `afd3cf47` | Pins a validated interior array slice for one callback, eliminating partial-I/O allocation and copying without exposing an unsafe retained pointer. |
-| `{:varargs-after n}` on `jolt.ffi/defcfn` | `9c9bb7d3` | Lowers an explicit fixed/variadic boundary to Chez. Apple arm64 passes `fcntl`'s third argument according to the variadic ABI even though its Jolt type is known. |
-| `{:capture-native-error true}` on `jolt.ffi/defcfn` | `7391fe2e` | Returns `[result native-error]` from the foreign return boundary, before later runtime or native work can clobber POSIX `errno` or Windows last-error state. Every sentinel-returning operation whose error is consumed uses this pair; jolt-net no longer consumes ambient `jolt.ffi/errno`. |
+| `jolt.host/target` | `0287df67` | Select exact fail-closed ABI facts instead of inferring them from the build host. |
+| `:int16` / `:uint16` / `:short` / `:ushort` foreign types | `024af921` | `sockaddr_in.sin_family` and the `sockaddr_in6` fields are 16-bit. Without them the only option was the endian-dependent short-packing hack in `teensyp.ffi-net`. |
+| `jolt.ffi/with-byte-array-pointer` | `d5187050` | Loans a validated array slice to one synchronous callback using bounded snapshot/copy-back ownership without exposing a retained native pointer. |
+| `{:varargs-after n}` on `jolt.ffi/defcfn` | `14074483` | Lowers an explicit fixed/variadic boundary to Chez. Apple arm64 passes `fcntl`'s third argument according to the variadic ABI even though its Jolt type is known. |
+| `{:capture-native-error true}` on `jolt.ffi/defcfn` | `a9f5e691` | Returns `[result native-error]` from the foreign return boundary, before later runtime or native work can clobber POSIX `errno` or Windows last-error state. Every sentinel-returning operation whose error is consumed uses this pair; jolt-net no longer consumes ambient `jolt.ffi/errno`. |
 
-The pinned tip is the same fully validated v0.5.12 candidate used by the
+The pinned tip is the same fully validated v0.5.20 candidate used by the
 simulator work. It also carries later compiler and simulator changes, but
-jolt-net's runtime dependency is limited to the six rows above.
+jolt-net's fork-only runtime dependency is limited to the five rows above.
 
 These live in the proposed fork rather than inside jolt-net because each is a
 shared FFI/host platform concern. Nothing in this branch has been pushed to the

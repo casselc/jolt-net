@@ -82,17 +82,17 @@ Ownership transfers with both `net/connected` and `net/in-progress`; neither
 
 ## Requirements
 
-**jolt-net does not build on released upstream Jolt v0.5.12.** It currently
-pins the reviewed local proposal fork at
-`757389df094fa9afb7fa1f1eba5ba83ab297f1a4` on
-`codex/upstream-rebase-v0.5.12-candidate` and depends on six shared host/FFI
-features retained there:
+**jolt-net currently targets the reviewed proposal core based on upstream Jolt
+v0.5.20.** It pins
+`9fc64f93eba8b56a319f91bb1a322e2efced9c70` on
+`codex/upstream-rebase-v0.5.20`. Deadlines use upstream's public
+`jolt.host/mono-nanos`; five additional shared host/FFI features remain on the
+proposal branch:
 
 - `(jolt.host/target)` — the target descriptor, for fail-closed platform tables;
-- `jolt.host/monotonic-nanos` — a real monotonic source for deadlines;
 - `:int16` / `:uint16` foreign types — `sockaddr` fields are 16-bit;
-- `jolt.ffi/with-byte-array-pointer` — a scoped, pinned pointer to any validated
-  array slice, so partial reads and writes do not allocate or copy.
+- `jolt.ffi/with-byte-array-pointer` — a scoped pointer loan over any validated
+  array slice, with bounded snapshot/copy-back ownership around the native call.
 - `{:varargs-after n}` on `jolt.ffi/defcfn` — preserves the C variadic ABI
   boundary even with a fully typed Jolt signature; required for `fcntl` on
   Apple arm64.
