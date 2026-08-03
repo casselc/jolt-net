@@ -364,6 +364,54 @@
         (when-not @released? (poller/release-wake-write! p writer))
         (net/close! p))))
 
+  (c/section "w4: an exiting await must not itself retire the receiver")
+  ;; The proven race this section regresses: close's own step 2 (the
+  ;; acknowledged :clear mutation) publishes an ORDINARY wake that releases a
+  ;; parked native wait. The awakened await's own finally then runs
+  ;; exit-await!, on its own thread, concurrently with close's thread walking
+  ;; steps 3-6. If exit-await! retired the receiver itself -- rather than
+  ;; leaving that to the winning close!, only after close's own sender
+  ;; retirement -- it could close the read end while a still-admitted wake
+  ;; writer (this section's `writer`, held exactly like the admitted-sender
+  ;; section above) has not yet issued its native write. Forcing that writer
+  ;; to stay admitted across the whole hand-off makes any premature
+  ;; retirement observable directly, instead of only as an intermittent EPIPE
+  ;; on the writer's send.
+  (let [p (net/open-poller)
+        writer (poller/acquire-wake-write! p)
+        released? (atom false)]
+    (try
+      (c/check-pred "a wake write was admitted before the await started"
+                    some? writer)
+      (let [f (blocked-await! p)
+            closing (future (poller/close! p))]
+        ;; Close's step 2 wake releases the parked native wait. Future
+        ;; completion proves exit-await! returned; merely observing its
+        ;; :awaiting? CAS would leave a preemption window before the old
+        ;; implementation's erroneous finish-close! call.
+        (c/check "the awaited call exited on the ordinary wake"
+                 {:ok []} (woke? f))
+        ;; Still true: retire-wake-writes! (close's steps 4-6) cannot pass the
+        ;; admitted writer, so close has not reached finish-close! itself yet.
+        (c/check "close is still blocked behind the admitted writer"
+                 timeout-token (deref closing blocked-probe-ms timeout-token))
+        ;; The load-bearing assertion. Because the future above completed,
+        ;; exit-await! has returned; old code has already retired the receiver
+        ;; at this point, while fixed code leaves it to the blocked closer.
+        (c/check "the receiver stays open while the writer is still admitted"
+                 false (h/closed? (:read (:wake p))))
+        (poller/release-wake-write! p writer)
+        (reset! released? true)
+        (c/check "close completes once the held writer is released"
+                 true (deref closing watchdog-ms timeout-token))
+        (c/check "both wake handles are retired once close completes"
+                 [true true]
+                 [(h/closed? (:write (:wake p)))
+                  (h/closed? (:read (:wake p)))]))
+      (finally
+        (when-not @released? (poller/release-wake-write! p writer))
+        (net/close! p))))
+
   (c/section "w4: an await admission racing close")
   ;; Force the exact interleaving: close reads an unawaited lifecycle value, a
   ;; REAL await is admitted before close's CAS, and close's CAS therefore fails

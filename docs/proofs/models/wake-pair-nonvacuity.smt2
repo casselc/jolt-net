@@ -25,6 +25,10 @@
 ;
 ; Expected: sat. In every witness admitted=true, retirement precedes the
 ; writer's write/release, and write-close precedes read-close.
+;
+; The executable companion now also keeps an await active across this witness:
+; its future returns before the held writer drains, while the receiver remains
+; open, then close retires both handles after release.
 
 (set-option :produce-unsat-cores true)
 

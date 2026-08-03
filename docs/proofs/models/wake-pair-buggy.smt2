@@ -25,6 +25,11 @@
 ; this interval can raise process-fatal SIGPIPE.
 ;
 ; Expected: sat, with admit=0, close-begin=1, read-close=2, write=3, release=4.
+;
+; Source correspondence (2026-08-02): the pre-fix exit-await! cleared the
+; awaiting flag and then called finish-close! on the waiter thread. That
+; alternate finalizer could supply read-close=2 while the winning close still
+; waited behind an admitted writer, exactly realizing this existing witness.
 
 (set-option :produce-unsat-cores true)
 

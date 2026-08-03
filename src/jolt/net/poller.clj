@@ -197,13 +197,10 @@
   is acquired while admission is held, so close cannot pass the drain point
   between admission and descriptor use.
 
-  There is a second way to get nil, and it is not a fault. The awaiting caller
-  that close just woke runs `finish-close!` from its own finally, and that
-  retires BOTH wake handles. So the sender can already be closed while close is
-  still walking its sequence -- which simply means the boundary completed
-  underneath this caller, exactly the situation nil already describes. Only a
-  use-after-close is absorbed that way; any other acquire failure still
-  propagates."
+  Nil means only that admission was already retired before this caller's CAS.
+  Once the CAS increments :writers, close cannot retire the sender until this
+  caller releases, so a failed handle acquisition is an invariant violation
+  and propagates after rolling back the admission count."
   [poller]
   (let [admission (:wake-admission poller)
         unadmit! (fn []
@@ -221,9 +218,7 @@
               (h/acquire! (:write (:wake poller)))
               (catch :default e
                 (unadmit!)
-                (if (= :use-after-close (:jolt.net/op (ex-data e)))
-                  nil
-                  (throw e))))
+                (throw e)))
             (recur)))))))
 
 (defn release-wake-write!
@@ -302,19 +297,20 @@
 
 (defn- ensure-wake-byte! [poller]
   (when (compare-and-set! (:wake-pending poller) false true)
-    (if-let [lease (acquire-wake-write! poller)]
-      (try
-        (send-wake-byte! poller lease)
-        (catch :default e
-          ;; Closing the poller can race a redundant wake. Only propagate while
-          ;; the poller is still open; close publishes its own terminal wake and
-          ;; reports a failure there rather than swallowing it.
-          (when (= :open (:phase @(:lifecycle poller)))
-            (reset! (:wake-pending poller) false)
-            (throw e)))
-        (finally (release-wake-write! poller lease)))
-      ;; Close retired admission after the caller observed an open poller.
-      (reset! (:wake-pending poller) false)))
+    (try
+      (if-let [lease (acquire-wake-write! poller)]
+        (try
+          (send-wake-byte! poller lease)
+          (finally (release-wake-write! poller lease)))
+        ;; Close retired admission after the caller observed an open poller.
+        (reset! (:wake-pending poller) false))
+      (catch :default e
+        (reset! (:wake-pending poller) false)
+        ;; Closing can race a redundant ordinary wake. Only propagate while
+        ;; still open; the winning close publishes and reports its own terminal
+        ;; wake failure after completing teardown.
+        (when (= :open (:phase @(:lifecycle poller)))
+          (throw e)))))
   nil)
 
 (defn- publish-terminal-wake!
@@ -332,10 +328,11 @@
   peer. POSIX additionally gets POLLHUP from the retired write end, but this
   path does not depend on that.
 
-  Returns nil, or the native exception if the send genuinely failed. Close
-  carries that value to the end of its sequence and throws it only after the
-  boundary has completed, so a transport fault is reported rather than silently
-  swallowed AND rather than leaving the poller stuck in :closing."
+  Returns nil, or the exception if sender acquisition/publication failed or
+  admission was already retired unexpectedly. Close carries that value to the
+  end of its sequence and throws it only after the boundary has completed, so
+  a transport or invariant fault is reported rather than silently swallowed AND
+  rather than leaving the poller stuck in :closing."
   [poller]
   (when (wake-transport? poller)
     ;; Advance the epoch first, exactly as an ordinary wake does, so a drain
@@ -344,21 +341,28 @@
     ;; admission is retired -- which is why it is a supplement to await-ready's
     ;; pre-entry terminal check rather than the guarantee itself.
     (swap! (:wake-sequence poller) inc)
-    (if-let [lease (acquire-wake-write! poller)]
-      (try
-        (send-wake-byte! poller lease)
-        ;; A real byte now exists, so any coalesced producer that already set
-        ;; the gate is satisfied by it too.
-        (reset! (:wake-pending poller) true)
-        nil
-        (catch :default e e)
-        (finally (release-wake-write! poller lease)))
-      ;; No lease. Close publishes BEFORE it retires admission, so this can only
-      ;; mean the await that close already woke -- via the acknowledged :clear
-      ;; mutation's own wake, one step earlier -- has exited and run
-      ;; finish-close! underneath us, retiring the transport. The boundary is
-      ;; already met and nothing is stranded, so this is nil, not a failure.
-      nil)))
+    (try
+      (if-let [lease (acquire-wake-write! poller)]
+        (try
+          (send-wake-byte! poller lease)
+          ;; A real byte now exists, so any coalesced producer that already set
+          ;; the gate is satisfied by it too.
+          (reset! (:wake-pending poller) true)
+          nil
+          (catch :default e e)
+          (finally (release-wake-write! poller lease)))
+        ;; The winning close invokes this before it retires admission. Nil is
+        ;; therefore not a normal lost race: accepting it would let Windows
+        ;; report a completed close without publishing its only cancellation.
+        (err/invalid-ex
+         :wake
+         "terminal wake admission retired before publication"
+         {:jolt.net/invariant :terminal-wake-before-admission-retirement}))
+      (catch :default e
+        ;; Sender acquisition itself can fail only if internal ownership was
+        ;; corrupted. Defer that exact exception through close's normal failure
+        ;; path so both handles and lifecycle still reach their terminal state.
+        e))))
 
 (defn wake-transport?
   "Does this poller have a wake transport beneath it?
@@ -697,12 +701,23 @@
           (recur))))))
 
 (defn- exit-await! [poller]
+  ;; Clears :awaiting? only -- it must NOT also call finish-close!. The winning
+  ;; close! is the sole transport finalizer: it spins on this flag (its step 7)
+  ;; and calls finish-close! itself, only after its own sender retirement
+  ;; (steps 4-6) has completed. If this function raced ahead and retired the
+  ;; receiver here instead, an already-admitted wake writer -- including
+  ;; close's own terminal publish, which runs concurrently with this await
+  ;; exiting -- could still be holding its write-handle lease with the
+  ;; native write(2) not yet issued. Retiring the receiver closes the read end
+  ;; immediately (it holds no lease at this point, since the wake lease was
+  ;; already released just above in await-ready's finally); the pending
+  ;; writer then hits EPIPE against a reader that is already gone.
   (let [lifecycle (:lifecycle poller)]
     (loop []
       (let [old @lifecycle
             next (assoc old :awaiting? false)]
         (if (compare-and-set! lifecycle old next)
-          (finish-close! poller)
+          nil
           (recur))))))
 
 (defn- poll-once

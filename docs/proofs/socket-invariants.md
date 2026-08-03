@@ -253,8 +253,26 @@ count second. Once close observes zero admitted writers, no thread can still iss
 - `wake-pair-nonvacuity.smt2` is **sat** with an admitted writer held across
   retirement; after it drains, close still completes both pipe ends.
 
-The forced-interleaving runtime test holds one admitted writer across close and
-proves close cannot retire the read end until that writer releases.
+The forced-interleaving runtime tests now combine all three participants that
+the model orders: an active await, one already-admitted writer, and the winning
+close. The ordinary clear wake lets the await return while the held writer
+keeps close behind its drain boundary; completion of the await future proves
+`exit-await!` itself has returned, after which the receiver must still be open.
+This exposed a source/model mismatch on 2026-08-02: `exit-await!` used to call
+`finish-close!` after clearing `:awaiting?`, providing an alternate receiver
+finalizer that bypassed the modelled writer drain. The old implementation at
+`f264852` realizes the buggy witness and fails exactly that assertion (270 pass,
+1 fail); making the winning `close!` the sole finalizer restores the corrected
+ordering (276 pass, 0 fail on Linux). The POSIX suite carries the executable
+bug control, and the native Windows wake suite carries the same future-
+completion/receiver-ownership oracle for its byte-only transport.
+
+Two corruption controls exercise the fail-closed edge of the same premise.
+Prematurely retiring the sender makes terminal publication report the exact
+use-after-close instead of disappearing as a benign lost race; prematurely
+retiring admission makes close report
+`:terminal-wake-before-admission-retirement`. In both cases close defers the
+error until lifecycle is `:closed` and both transport handles are retired.
 
 **Non-blocking transition invariant.** Every lease proof above has a premise
 that is easy to overlook: an operation called “short” must really be

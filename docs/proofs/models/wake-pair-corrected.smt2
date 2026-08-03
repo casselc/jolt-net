@@ -28,6 +28,11 @@
 ;
 ; Expected: unsat. The asserted violation is "read closed while the admitted
 ; writer count still includes this writer."
+;
+; Source correspondence (2026-08-02): exit-await! now only clears the awaiting
+; flag. The winning close is the sole finalizer and calls finish-close! only
+; after admission retirement, writer drain, and sender retirement, making the
+; write-close-before-read-close premise true of every production path.
 
 (set-option :produce-unsat-cores true)
 

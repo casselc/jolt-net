@@ -597,7 +597,77 @@
       (finally
         (when-not @released?
           (poller/release-wake-write! p writer))
-        (net/close! p)))))
+        (net/close! p))))
+
+  ;; Force the terminal-wake/receiver-retirement race that previously escaped
+  ;; as EPIPE on Linux.  The held writer keeps the winning close! behind its
+  ;; writer-drain boundary, while close's ordinary clear wake lets the active
+  ;; await return.  Once that future has returned, exit-await! has completed;
+  ;; the read end must nevertheless remain owned until the held writer drains
+  ;; and the winning close performs the sole finalization.
+  (let [p (net/open-poller)
+        writer (poller/acquire-wake-write! p)
+        released? (atom false)]
+    (try
+      (c/check-pred "a wake writer is admitted before the terminal await"
+                    some? writer)
+      (let [waiting (future (net/await-ready p 2500))]
+        (c/check "terminal-race await entered before close"
+                 true (wait-for-await! p))
+        (let [closing (future (net/close! p))]
+          (c/check "the ordinary close wake releases the await"
+                   [] (deref waiting 500 ::timed-out))
+          (c/check "close remains behind the admitted writer"
+                   ::still-closing (deref closing 20 ::still-closing))
+          (c/check "an exited await did not retire the pipe receiver"
+                   false (h/closed? (:read (:wake p))))
+          (poller/release-wake-write! p writer)
+          (reset! released? true)
+          (c/check "terminal close completes after the writer drains"
+                   true (deref closing 500 ::timed-out))
+          (c/check "terminal close retires both pipe handles"
+                   [true true]
+                   [(h/closed? (:write (:wake p)))
+                    (h/closed? (:read (:wake p)))])))
+      (finally
+        (when-not @released?
+          (poller/release-wake-write! p writer))
+        (net/close! p))))
+
+  (c/section "poller terminal-wake invariant failures")
+  ;; Corrupt each internal ownership premise deliberately. Close must still
+  ;; finish teardown, but it must not report success after omitting the
+  ;; terminal publication that is Windows' only cancellation guarantee.
+  (let [p (net/open-poller)]
+    (try
+      (c/check "the corruption control prematurely retires the sender"
+               true (h/close! (:write (:wake p))))
+      (c/check-throws
+       "close reports an unexpectedly retired sender"
+       {:jolt.net/kind :invalid :jolt.net/op :use-after-close}
+       #(net/close! p))
+      (c/check "sender failure is deferred until teardown completes"
+               [:closed true true]
+               [(:phase @(:lifecycle p))
+                (h/closed? (:write (:wake p)))
+                (h/closed? (:read (:wake p)))])
+      (finally (net/close! p))))
+
+  (let [p (net/open-poller)]
+    (try
+      (reset! (:wake-admission p) {:phase :retired :writers 0})
+      (c/check-throws
+       "close rejects terminal publication after premature admission retirement"
+       {:jolt.net/kind :invalid
+        :jolt.net/op :wake
+        :jolt.net/invariant :terminal-wake-before-admission-retirement}
+       #(net/close! p))
+      (c/check "admission failure is deferred until teardown completes"
+               [:closed true true]
+               [(:phase @(:lifecycle p))
+                (h/closed? (:write (:wake p)))
+                (h/closed? (:read (:wake p)))])
+      (finally (net/close! p)))))
 
 (defn run! []
   ;; Windows joined the readiness runtime in task W4. The gate below must name
