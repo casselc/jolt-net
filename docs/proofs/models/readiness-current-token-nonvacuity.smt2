@@ -1,4 +1,7 @@
-; Non-vacuity control for both readiness mismatch models.
+; Non-vacuity control for the readiness mismatch models and for
+; readiness-removed-registration.smt2.
+;
+; Source anchor: jolt.net.poller/current-token?.
 ;
 ; A current open registration with an admitted snapshot lease, native readiness,
 ; and matching fd/generation/revision must remain dispatchable. This rules out a

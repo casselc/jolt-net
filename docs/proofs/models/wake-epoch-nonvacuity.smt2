@@ -1,5 +1,16 @@
 ; Non-vacuity control for wake-epoch-corrected.smt2.
 ;
+; TRANSPORT INDEPENDENCE (task W4). The epoch handshake is arithmetic over the
+; poller's own shared counter and Boolean gate. It names no descriptor, no
+; syscall and no delivery guarantee, so it holds unchanged for the POSIX
+; self-pipe and for the Windows connected loopback datagram pair.
+;
+; It does NOT cover close's terminal wake, which deliberately BYPASSES this
+; coalescing gate: the gate can read `true` for a producer whose own send has
+; not landed, and close needs a byte that is definitely in the receiver. That is
+; a separate claim -- see windows-terminal-wake-corrected.smt2 for delivery and
+; close-completion-ordering-corrected.smt2 for the publish/retire order.
+;
 ; Force the exact Boolean coalescing race: await captured entry epoch 0, drain
 ; also sampled 0, a concurrent producer advanced to epoch 1 while the old gate
 ; remained true and wrote no byte, then reset observed the epoch change and

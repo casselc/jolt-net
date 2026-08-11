@@ -57,7 +57,10 @@
   (let [p (ffi/alloc 4)]
     (try
       (ffi/write p :int 0 v)
-      (err/checked :setsockopt neg? #(nffi/invoke :setsockopt raw level opt p 4) ctx)
+      (err/checked-captured
+       :setsockopt neg?
+       (nffi/invoke-captured :setsockopt raw level opt p 4)
+       ctx)
       (finally (ffi/free p)))))
 
 (defn- apply-options! [raw opts ctx]
@@ -94,33 +97,43 @@
 
 (defn- socket-for [resolved ctx]
   (nffi/ensure-subsystem!)
-  (err/checked :socket #(not (nffi/handle-valid? %))
-               #(nffi/invoke :socket
-                             (if (= :inet6 (:jolt.net/family resolved))
-                               (t/const d :af-inet6) (t/const d :af-inet))
-                             (t/const d :sock-stream)
-                             0)
-               ctx))
+  (err/checked-captured
+   :socket
+   #(not (nffi/handle-valid? %))
+   (nffi/invoke-captured
+    :socket
+    (if (= :inet6 (:jolt.net/family resolved))
+      (t/const d :af-inet6) (t/const d :af-inet))
+    (t/const d :sock-stream)
+    0)
+   ctx))
 
-(def ^:private posix-nonblocking-targets #{:linux :darwin})
-(def ^:private poller-targets #{:linux :darwin})
+;; Non-blocking transitions and byte I/O are available wherever jolt.net has a
+;; real transition mechanism: fcntl on POSIX, ioctlsocket(FIONBIO) on Winsock.
+;; READINESS additionally needs a native wait AND an owner-independent wake
+;; transport. Windows gained the first in task W3 (WSAPoll) and the second in
+;; task W4 (a connected loopback datagram pair), so the two sets now coincide --
+;; but they stay separate definitions, because they are separate capabilities
+;; and a future target may well have one without the other.
+(def ^:private nonblocking-targets #{:linux :darwin :windows})
+(def ^:private poller-targets #{:linux :darwin :windows})
 
-(defn- posix-nonblocking-runtime? []
-  (contains? posix-nonblocking-targets (:os (jolt.host/target))))
+(defn- nonblocking-runtime? []
+  (contains? nonblocking-targets (:os (jolt.net.target/current-target))))
 
 (defn- poller-runtime? []
-  (contains? poller-targets (:os (jolt.host/target))))
+  (contains? poller-targets (:os (jolt.net.target/current-target))))
 
-(defn- require-posix-nonblocking-runtime! [op]
-  (when-not (posix-nonblocking-runtime?)
+(defn- require-nonblocking-runtime! [op]
+  (when-not (nonblocking-runtime?)
     (throw (ex-info (str "jolt.net " (name op)
-                         ": the non-blocking runtime is POSIX-only in this slice")
+                         ": this target has no non-blocking transition")
                     {:jolt.net/op op
                      :jolt.net/kind :unsupported-target
-                     :jolt.net/target (jolt.host/target)}))))
+                     :jolt.net/target (jolt.net.target/current-target)}))))
 
 (defn- with-nonblocking-lease [sock f]
-  (require-posix-nonblocking-runtime! :set-nonblocking)
+  (require-nonblocking-runtime! :set-nonblocking)
   (h/with-lease
     sock
     (fn [raw generation]
@@ -138,7 +151,8 @@
         lenp (ffi/alloc 4)]
     (try
       (ffi/write lenp :int 0 sz)
-      (err/checked op neg? #(nffi/invoke op raw sa lenp) nil)
+      (err/checked-captured
+       op neg? (nffi/invoke-captured op raw sa lenp) nil)
       (addr/decode-sockaddr d sa)
       (finally (ffi/free sa) (ffi/free lenp)))))
 
@@ -174,9 +188,13 @@
        (try
          (apply-options! raw opts ctx)
          (with-sockaddr resolved
-           (fn [p len] (err/checked :bind neg? #(nffi/invoke :bind raw p len) ctx)))
-         (err/checked :listen neg?
-                      #(nffi/invoke :listen raw (or (:backlog opts) 128)) ctx)
+           (fn [p len]
+             (err/checked-captured
+              :bind neg? (nffi/invoke-captured :bind raw p len) ctx)))
+         (err/checked-captured
+          :listen neg?
+          (nffi/invoke-captured :listen raw (or (:backlog opts) 128))
+          ctx)
          (when (poller-runtime?)
            (nb/set-raw! raw ctx))
          ;; ownership transfers only on success
@@ -193,8 +211,11 @@
 (defn- native-blocking-accept
   [listener]
   (let [raw (h/raw-open listener)
-        c (err/checked :accept #(not (nffi/handle-valid? %))
-                       #(nffi/invoke :accept raw ffi/null ffi/null) nil)]
+        c (err/checked-captured
+           :accept
+           #(not (nffi/handle-valid? %))
+           (nffi/invoke-captured :accept raw ffi/null ffi/null)
+           nil)]
     (try
       ;; the accepted socket does not inherit SO_NOSIGPIPE on BSD
       (when-let [nosig (t/const d :so-nosigpipe)]
@@ -207,13 +228,26 @@
 (defn accept
   "Accept one connection, blocking until one arrives.
 
-  On supported POSIX targets this is built from short non-blocking accept leases
-  plus the close-wakeable poller, so concurrent listener close cannot race a recycled
-  descriptor or deadlock behind an uninterruptible lease. Other existing
-  platform paths retain their native blocking implementation in this slice."
+  On every target with a readiness runtime -- Linux, macOS, and, since task W4,
+  Windows -- this is built from short non-blocking accept leases plus the
+  close-wakeable poller, so concurrent listener close cannot race a recycled
+  descriptor or deadlock behind an uninterruptible lease.
+
+  That construction also makes blocking and non-blocking use MIX safely. The
+  listener is switched to non-blocking mode by this path itself, so a prior
+  `try-accept` changes nothing: task W2's Windows refusal existed only because
+  native blocking accept could not be interrupted, and there is no longer a
+  native blocking accept on Windows to protect. Listener close is a bounded
+  completion boundary here rather than an unbounded park.
+
+  `native-blocking-accept` remains only as the fallback for a hypothetical
+  target that has sockets but no readiness runtime. It is unreachable on every
+  currently supported target, and is deliberately NOT what Windows uses."
   [listener]
   (if-not (poller-runtime?)
-    (native-blocking-accept listener)
+    (do
+      (h/raw-open listener)
+      (native-blocking-accept listener))
     (let [p (poller/open)
           terminal-listener (atom nil)]
       (try
@@ -228,9 +262,16 @@
           (throw (err/invalid-ex :accept "listener is closed" nil)))
         (poller/register! p listener #{:read})
         (loop []
-          (let [accepted (try-accept listener)]
+          ;; Sample the wake cursor BEFORE the accept attempt, not inside the
+          ;; await. try-accept is this loop's read of producer-owned state, so a
+          ;; wake published after it -- a close, or a registration mutation --
+          ;; must arm the wait rather than be consumed as pre-entry. This is the
+          ;; same defect the terminal-listener callback above works around from
+          ;; the other side; the cursor removes the window itself.
+          (let [cursor (poller/wake-cursor p)
+                accepted (try-accept listener)]
             (if (= would-block accepted)
-              (do (poller/await-ready p 1000) (recur))
+              (do (poller/await-ready p 1000 cursor) (recur))
               accepted)))
         (finally
           (when-let [id @terminal-listener]
@@ -238,8 +279,9 @@
           (poller/close! p))))))
 
 (defn set-nonblocking!
-  "Put a socket into non-blocking mode. This slice supports POSIX fcntl targets;
-  Windows fails closed until its ioctlsocket path is implemented."
+  "Put a socket into non-blocking mode: fcntl(F_SETFL) on POSIX,
+  ioctlsocket(FIONBIO) on Windows. The handle is marked only after the native
+  transition succeeds."
   [sock]
   (with-nonblocking-lease sock (fn [_ _] nil))
   sock)
@@ -267,16 +309,16 @@
   ::would-block; genuine failures throw."
   ([listener] (try-accept listener {}))
   ([listener opts]
-   (require-posix-nonblocking-runtime! :try-accept)
+   (require-nonblocking-runtime! :try-accept)
    (with-nonblocking-lease
      listener
      (fn [raw _]
-       (let [c (nffi/invoke :try-accept raw ffi/null ffi/null)]
+       (let [[c code]
+             (nffi/invoke-captured :try-accept raw ffi/null ffi/null)]
          (if-not (nffi/handle-valid? c)
-           (let [code (err/capture)]
-             (if (would-block-code? code)
-               would-block
-               (throw (err/native-ex :accept code nil))))
+           (if (would-block-code? code)
+             would-block
+             (throw (err/native-ex :accept code nil)))
            (try
              (apply-options! c opts nil)
              (nb/set-raw! c)
@@ -306,7 +348,10 @@
                    (apply-options! raw opts ctx)
                    (with-sockaddr a
                      (fn [p len]
-                       (err/checked :connect neg? #(nffi/invoke :connect raw p len) ctx)))
+                       (err/checked-captured
+                        :connect neg?
+                        (nffi/invoke-captured :connect raw p len)
+                        ctx)))
                    (when (poller-runtime?)
                      (nb/set-raw! raw ctx))
                    (let [socket
@@ -351,9 +396,9 @@
     (and (map? endpoint-or-addresses)
          (contains? endpoint-or-addresses :jolt.net/sockaddr))
     (throw (err/invalid-ex
-             :connect
-             "malformed resolved-address value"
-             {:jolt.net/value endpoint-or-addresses}))
+            :connect
+            "malformed resolved-address value"
+            {:jolt.net/value endpoint-or-addresses}))
 
     ;; An endpoint is intentionally accepted for the common case. A connector
     ;; that already resolved once can instead pass the owned address vector,
@@ -365,16 +410,16 @@
     (let [addresses (vec endpoint-or-addresses)]
       (when-not (every? resolved-address? addresses)
         (throw (err/invalid-ex
-                 :connect
-                 "connect candidates must be resolved-address values"
-                 {:jolt.net/candidates endpoint-or-addresses})))
+                :connect
+                "connect candidates must be resolved-address values"
+                {:jolt.net/candidates endpoint-or-addresses})))
       addresses)
 
     :else
     (throw (err/invalid-ex
-             :connect
-             "expected an endpoint, resolved address, or sequence of resolved addresses"
-             {:jolt.net/value endpoint-or-addresses}))))
+            :connect
+            "expected an endpoint, resolved address, or sequence of resolved addresses"
+            {:jolt.net/value endpoint-or-addresses}))))
 
 (defn- try-connect-address [resolved opts]
   (let [ctx (connect-address-context resolved)
@@ -386,13 +431,9 @@
           (with-sockaddr
             resolved
             (fn [p len]
-              (let [rc (nffi/invoke :try-connect raw p len)]
-                (if (neg? rc)
-                  ;; Capture before with-sockaddr frees its scratch pointer and
-                  ;; before rollback closes the raw socket.
-                  (let [code (err/capture)]
-                    (connect-initiation-status rc code ctx))
-                  (connect-initiation-status rc nil ctx)))))
+              (let [[rc code]
+                    (nffi/invoke-captured :try-connect raw p len)]
+                (connect-initiation-status rc code ctx))))
           (catch :default e
             (h/raw-close! raw)
             (throw e)))]
@@ -430,7 +471,7 @@
                  :jolt.net/remaining-addresses (vec more)))))))
 
 (defn try-connect
-  "Initiate a POSIX non-blocking connect.
+  "Initiate a non-blocking connect.
 
   `endpoint-or-addresses` may be an endpoint, one value returned by `resolve`,
   or a sequence of resolved addresses. Resolver order is preserved. Synchronous
@@ -451,10 +492,11 @@
   with :jolt.net/remaining-addresses; this keeps address policy above the socket
   substrate without losing candidates or replacing the last native error.
 
-  Windows fails closed until its non-blocking Winsock backend exists."
+  Windows initiates through the same contract, but has no poller until task W3:
+  a Windows caller must supply its own readiness wait before `finish-connect!`."
   ([endpoint-or-addresses] (try-connect endpoint-or-addresses {}))
   ([endpoint-or-addresses opts]
-   (require-posix-nonblocking-runtime! :try-connect)
+   (require-nonblocking-runtime! :try-connect)
    (let [addresses (vec (connect-addresses endpoint-or-addresses opts))]
      (when (empty? addresses)
        (throw (err/invalid-ex :connect "endpoint resolved to no addresses"
@@ -474,13 +516,13 @@
   before readiness is outside the contract because a zero pending error does
   not portably prove that connect has completed."
   [socket]
-  (require-posix-nonblocking-runtime! :finish-connect)
+  (require-nonblocking-runtime! :finish-connect)
   (let [resolved (:jolt.net/connect-address socket)]
     (when-not (resolved-address? resolved)
       (throw (err/invalid-ex
-               :finish-connect
-               "socket was not created by try-connect"
-               {:jolt.net/value socket})))
+              :finish-connect
+              "socket was not created by try-connect"
+              {:jolt.net/value socket})))
     (h/with-lease
       socket
       (fn [raw _]
@@ -494,14 +536,14 @@
               (try
                 (ffi/write errorp :int 0 0)
                 (ffi/write lenp :uint 0 4)
-                (err/checked
-                  :connect
-                  neg?
-                  #(nffi/invoke :getsockopt raw
-                                (t/const d :sol-socket)
-                                (t/const d :so-error)
-                                errorp lenp)
-                  ctx)
+                (err/checked-captured
+                 :connect neg?
+                 (nffi/invoke-captured
+                  :getsockopt raw
+                  (t/const d :sol-socket)
+                  (t/const d :so-error)
+                  errorp lenp)
+                 ctx)
                 (let [code (ffi/read errorp :int 0)]
                   (cond
                     (zero? code) connected
@@ -526,7 +568,8 @@
     (h/with-lease
       sock
       (fn [raw _]
-        (err/checked :shutdown neg? #(nffi/invoke :shutdown raw how) nil)))
+        (err/checked-captured
+         :shutdown neg? (nffi/invoke-captured :shutdown raw how) nil)))
     nil))
 
 ;; --- readiness-oriented byte I/O -------------------------------------------
@@ -544,7 +587,7 @@
   Returns a positive byte count, 0 only for a zero-length request,
   ::would-block, or ::eof. Genuine failures throw a structured exception."
   [sock dest off len]
-  (require-posix-nonblocking-runtime! :read)
+  (require-nonblocking-runtime! :read)
   (check-slice! :read dest off len)
   (if (zero? len)
     0
@@ -554,14 +597,14 @@
         (ffi/with-byte-array-pointer
           dest off len
           (fn [ptr nbytes]
-            (let [n (nffi/invoke :try-recv raw ptr nbytes 0)]
+            (let [[n code]
+                  (nffi/invoke-captured :try-recv raw ptr nbytes 0)]
               (cond
                 (pos? n) n
                 (zero? n) eof
-                :else (let [code (err/capture)]
-                        (if (would-block-code? code)
-                          would-block
-                          (throw (err/native-ex :read code nil))))))))))))
+                :else (if (would-block-code? code)
+                        would-block
+                        (throw (err/native-ex :read code nil)))))))))))
 
 (defn try-write-bytes!
   "Write from src[off,off+len) without waiting.
@@ -570,7 +613,7 @@
   ::would-block. The target's SIGPIPE suppression prevents a closed peer from
   terminating the process; genuine failures throw a structured exception."
   [sock src off len]
-  (require-posix-nonblocking-runtime! :write)
+  (require-nonblocking-runtime! :write)
   (check-slice! :write src off len)
   (if (zero? len)
     0
@@ -580,20 +623,20 @@
         (ffi/with-byte-array-pointer
           src off len
           (fn [ptr nbytes]
-            (let [n (nffi/invoke :try-send
-                                 raw ptr nbytes
-                                 (or (t/const d :msg-nosignal) 0))]
+            (let [[n code]
+                  (nffi/invoke-captured
+                   :try-send raw ptr nbytes
+                   (or (t/const d :msg-nosignal) 0))]
               (cond
                 (pos? n) n
                 (zero? n)
                 (throw (err/invalid-ex
-                         :write
-                         "send made no progress for a non-empty slice"
-                         {:jolt.net/length len}))
-                :else (let [code (err/capture)]
-                        (if (would-block-code? code)
-                          would-block
-                          (throw (err/native-ex :write code nil))))))))))))
+                        :write
+                        "send made no progress for a non-empty slice"
+                        {:jolt.net/length len}))
+                :else (if (would-block-code? code)
+                        would-block
+                        (throw (err/native-ex :write code nil)))))))))))
 
 (defn close!
   "Close a socket or poller. Idempotent: returns true if this call closed it."
@@ -610,7 +653,9 @@
 
 ;; --- readiness poller -------------------------------------------------------
 (defn open-poller
-  "Open a POSIX poll(2) poller. The returned owned value works with with-open."
+  "Open a readiness poller: poll(2) on POSIX, WSAPoll on Windows, each with its
+  own owner-independent non-blocking waker. The returned owned value works with
+  with-open. Targets without a readiness runtime fail closed here."
   []
   (poller/open))
 
@@ -634,7 +679,18 @@
   [p]
   (poller/wake! p))
 
+(defn wake-cursor
+  "Sample p's monotonic wake cursor before reading producer-owned state.
+
+  Pass the result to `await-ready` so a wake published after that read cannot be
+  discarded as predating the wait. See jolt.net.poller/wake-cursor."
+  [p]
+  (poller/wake-cursor p))
+
 (defn await-ready
-  "Wait up to timeout-ms and return readiness maps carrying current tokens."
-  [p timeout-ms]
-  (poller/await-ready p timeout-ms))
+  "Wait up to timeout-ms and return readiness maps carrying current tokens.
+
+  With a `cursor` from `wake-cursor`, wakes above it arm the wait instead of
+  being consumed as stale."
+  ([p timeout-ms] (poller/await-ready p timeout-ms))
+  ([p timeout-ms cursor] (poller/await-ready p timeout-ms cursor)))

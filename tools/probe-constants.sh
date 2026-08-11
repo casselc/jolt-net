@@ -37,11 +37,31 @@ probe_native() {
 
 probe_windows() {
     [ -x "$MINGW" ] || { echo "probe: no mingw gcc at $MINGW; skipping windows" >&2; return 1; }
-    # -lws2_32 is not needed: the probe only reads headers, it opens no socket.
-    "$MINGW" -O0 -o "$tmp/probe.exe" "$src"
-    chmod +x "$tmp/probe.exe"
+    # gcc.exe is a WINDOWS binary. It cannot create a file at a WSL-only path
+    # such as mktemp's /tmp/..., and it does not translate one either -- the
+    # link step just fails with "cannot open output file". Build inside the
+    # checkout instead, which is necessarily on a Windows-visible drive
+    # whenever this cross-compile is possible at all, and translate both paths
+    # explicitly rather than relying on interop's current-directory mapping.
+    wtmp="$root/.probe-tmp"
+    mkdir -p "$wtmp"
+    exe="$wtmp/probe.exe"
+    if command -v wslpath >/dev/null 2>&1; then
+        wexe="$(wslpath -w "$exe")"
+        wsrc="$(wslpath -w "$src")"
+    else
+        wexe="$exe"
+        wsrc="$src"
+    fi
+    # -lws2_32 IS required: the probe opens no socket, but it takes the address
+    # of WSAPoll to pin that function's exact declared signature, so the symbol
+    # has to resolve. That turns the signature fact into compile-AND-link
+    # evidence rather than a header reading alone.
+    "$MINGW" -O0 -o "$wexe" "$wsrc" -lws2_32
+    chmod +x "$exe"
     # Runs through WSL interop. Strip CR: the Windows binary emits CRLF.
-    "$tmp/probe.exe" | tr -d '\r' > "$tmp/win.edn"
+    "$exe" | tr -d '\r' > "$tmp/win.edn"
+    rm -rf "$wtmp"
     a=$(sed -n 's/^ :arch :\([a-z0-9-]*\).*/\1/p' "$tmp/win.edn")
     cp "$tmp/win.edn" "$out/windows-$a.edn"
     echo "probe: wrote tools/probed/windows-$a.edn (mingw, executed via WSL interop)"

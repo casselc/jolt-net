@@ -8,7 +8,8 @@
   A SKIP is not a pass and not a failure. Some behavior (IPv6 loopback) is
   genuinely unavailable in some containers, and silently counting that as a pass
   would be the worst outcome -- it would read as coverage we do not have."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [jolt.net.target :as target]))
 
 (def failures (atom 0))
 (def passes (atom 0))
@@ -67,6 +68,28 @@
 (defn section [title]
   (println)
   (println (str "-- " title " " (apply str (repeat (max 0 (- 68 (count title))) \-)))))
+
+(defn monotonic-clock-facts!
+  "Check the public upstream clock contract used by every deadline in jolt-net.
+
+  The API intentionally exposes nanoseconds from an arbitrary origin, not an
+  implementation/source identifier.  Keep these checks behavioral so a valid
+  upstream clock implementation can change without forcing jolt-net to know its
+  private name."
+  []
+  (let [a (target/monotonic-nanos)
+        b (target/monotonic-nanos)]
+    (check-pred "jolt.net.target/monotonic-nanos returns an exact integer" integer? a)
+    (check-pred "jolt.net.target/monotonic-nanos is nondecreasing" #(>= % a) b)
+    ;; This is the same discriminator used by Jolt's own telemetry gate.  It
+    ;; rules out the former currentTimeMillis*1e6 implementation while avoiding
+    ;; any assertion about Chez's private clock-source identity.
+    (check-pred
+     "jolt.net.target/monotonic-nanos is not millisecond-truncated"
+     identity
+     (some (fn [_]
+             (pos? (rem (target/monotonic-nanos) 1000000)))
+           (range 200)))))
 
 (defn summary
   "Print the roll-up. Returns the process exit code."

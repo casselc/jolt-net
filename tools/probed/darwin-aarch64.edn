@@ -4,6 +4,8 @@
  :socket-handle-bytes 4
  :socklen-bytes 4
  :nfds-bytes 4
+ :ioctl-cmd-bytes nil
+ :ioctl-arg-bytes nil
  :const {
   :af-unspec 0
   :af-inet 2
@@ -30,6 +32,7 @@
   :o-nonblock 4
   :f-getfl 3
   :f-setfl 4
+  :fionbio nil
   :pollin 1
   :pollout 4
   :pollerr 8

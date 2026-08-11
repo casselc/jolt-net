@@ -24,6 +24,8 @@
 
 ;; a descriptor's declared handle width, for comparison with the probe
 (defn- handle-bytes [d] (if (= :uptr (:handle-type d)) 8 4))
+(defn- socklen-bytes [d]
+  (case (:socklen-type d) (:int :uint) 4 :size_t 8 nil))
 (defn- addrlen-bytes [d]
   (if (= :size_t (get-in d [:layout :addrinfo :addrlen-type])) 8 4))
 (defn- nfds-bytes [d]
@@ -58,6 +60,26 @@
         (when-let [pollfd (get-in probe [:layout :pollfd])]
           (c/check (str label ": pollfd layout matches")
                    {} (diff-map pollfd (get-in d [:layout :pollfd]))))
+        ;; WSAPOLLFD is compared under its OWN key. A POSIX pollfd fact must
+        ;; never satisfy it: the offsets differ because the first member is a
+        ;; pointer-width SOCKET rather than an int.
+        (when-let [wsapollfd (get-in probe [:layout :wsapollfd])]
+          (c/check (str label ": WSAPOLLFD layout matches")
+                   {} (diff-map (dissoc wsapollfd :fd-bytes :events-bytes
+                                        :revents-bytes)
+                                (get-in d [:layout :wsapollfd])))
+          (c/check (str label ": WSAPOLLFD fd is the socket handle width")
+                   (:fd-bytes wsapollfd) (handle-bytes d))
+          ;; The encoder writes both event words as 16-bit cells. If Winsock
+          ;; ever widened SHORT here, that write would be short of the field.
+          (c/check (str label ": WSAPOLLFD events word is 16 bits")
+                   2 (:events-bytes wsapollfd))
+          (c/check (str label ": WSAPOLLFD revents word is 16 bits")
+                   2 (:revents-bytes wsapollfd)))
+        ;; Unconditional on purpose: on POSIX the assertion is that no WSAPoll
+        ;; signature fact exists to be reached by mistake.
+        (c/check (str label ": WSAPoll signature widths match")
+                 (:wsapoll probe) (:wsapoll d))
         ;; addrinfo carries the field ORDER difference that bites in practice:
         ;; Linux puts ai_addr before ai_canonname, Windows and macOS the reverse.
         (c/check (str label ": addrinfo layout matches")
@@ -69,16 +91,41 @@
                  (get-in probe [:layout :sin-len?]) (:sin-len? d))
         (c/check (str label ": socket handle width matches")
                  (:socket-handle-bytes probe) (handle-bytes d))
+        (c/check (str label ": socket address-length width matches")
+                 (:socklen-bytes probe) (socklen-bytes d))
         (c/check (str label ": nfds_t width matches")
                  (:nfds-bytes probe) (nfds-bytes d))
+        ;; Winsock-only, and deliberately compared on every platform: the
+        ;; interesting assertion on POSIX is that these stay absent, and on
+        ;; Win64 that neither is pointer-width despite every other handle-ish
+        ;; type there being 8 bytes.
+        (c/check (str label ": ioctlsocket command width matches")
+                 (:ioctl-cmd-bytes probe) (:ioctl-cmd-bytes d))
+        (c/check (str label ": ioctlsocket argument width matches")
+                 (:ioctl-arg-bytes probe) (:ioctl-arg-bytes d))
         (c/check (str label ": errno codes match") {} (diff-map (:errno probe) (:errno d)))
         (c/check (str label ": EAI_* codes match") {} (diff-map (:gai probe) (:gai d)))))))
 
 (defn run! []
   (c/section "target: selection and fail-closed behavior")
 
-  (c/check-pred "this host is a supported target" true? (t/supported-target? (jolt.host/target)))
+  (c/check-pred "this host is a supported target" true? (t/supported-target? (jolt.net.target/current-target)))
   (c/check-pred "descriptor resolves for this host" map? (t/descriptor))
+  (c/check "threaded Linux x86-64 selects exact facts"
+           {:os :linux :arch :x86-64 :pointer-bits 64}
+           (t/target-for-machine-type "ta6le"))
+  (c/check "threaded Windows ARM64 selects exact facts"
+           {:os :windows :arch :aarch64 :pointer-bits 64}
+           (t/target-for-machine-type "tarm64nt"))
+  (c/check "threaded Darwin ARM64 selects exact facts"
+           {:os :darwin :arch :aarch64 :pointer-bits 64}
+           (t/target-for-machine-type "tarm64osx"))
+  (c/check-throws "an unknown machine tag fails rather than matching a suffix"
+                  {:jolt.net/kind :unsupported-target}
+                  #(t/target-for-machine-type "future-ta6le"))
+  (c/check-throws "case drift in a machine tag fails closed"
+                  {:jolt.net/kind :unsupported-target}
+                  #(t/target-for-machine-type "TA6LE"))
 
   ;; Fail closed. Each of these would be a wrong struct offset if guessed.
   (c/check-throws "an unknown os throws rather than guessing"
@@ -115,6 +162,14 @@
   (c/section "target: descriptors vs probed platform headers")
   (check-against-probe "linux/x86-64" [:linux :x86-64 64])
   (check-against-probe "windows/x86-64" [:windows :x86-64 64])
+  ;; Windows/aarch64 is compared against its OWN probe file, executed on a
+  ;; native ARM64 runner. Running this comparison from any host is sound because
+  ;; both sides are pure data; it is not, and is never reported as, evidence
+  ;; that a socket was opened on ARM64. That is what the W1-W4 ARM64 gate is for.
+  (if (read-probe "windows" "aarch64")
+    (check-against-probe "windows/aarch64" [:windows :aarch64 64])
+    (c/skip "windows/aarch64 vs probed headers"
+            "tools/probed/windows-aarch64.edn missing; run the ARM64 CI probe"))
 
   ;; Make the macOS gap explicit rather than silent. If someone probes a Mac and
   ;; commits the file, this flips from SKIP to a real comparison automatically.
@@ -123,10 +178,33 @@
   ;; records which, and the comparison below runs as soon as the file exists.
   (c/check "macOS is now machine-probed"
            :probed (:evidence (t/descriptor {:os :darwin :arch :aarch64 :pointer-bits 64})))
+  (c/check "macOS x86-64 stays inferred until its native CI evidence is reviewed"
+           :inferred-from-darwin-aarch64
+           (:evidence (t/descriptor {:os :darwin :arch :x86-64 :pointer-bits 64})))
   (if (read-probe "darwin" "aarch64")
     (check-against-probe "darwin/aarch64" [:darwin :aarch64 64])
     (c/skip "darwin/aarch64 vs probed headers"
             "tools/probed/darwin-aarch64.edn missing; run CI or probe on a Mac"))
   (c/check "linux/aarch64 records that it is inferred, not probed"
            :inferred-from-linux-x86-64
-           (:evidence (t/descriptor {:os :linux :arch :aarch64 :pointer-bits 64}))))
+           (:evidence (t/descriptor {:os :linux :arch :aarch64 :pointer-bits 64})))
+
+  ;; Windows/aarch64 is the one same-ABI alias in this table whose evidence label
+  ;; is :probed rather than :inferred-*. Assert that difference explicitly, so
+  ;; the label cannot drift into matching the Linux/Darwin aliases by tidiness.
+  (c/check "windows/aarch64 records that it was probed, not inferred"
+           :probed
+           (:evidence (t/descriptor {:os :windows :arch :aarch64 :pointer-bits 64})))
+  ;; The equality between the two Windows columns is a claim; check it here as
+  ;; data as well as byte-for-byte in CI, so a future edit to one column that
+  ;; forgets the other is a failure rather than a silent divergence.
+  (c/check "the two Windows columns carry identical ABI facts"
+           (t/descriptor {:os :windows :arch :x86-64 :pointer-bits 64})
+           (t/descriptor {:os :windows :arch :aarch64 :pointer-bits 64}))
+  (c/check-pred "windows/aarch64 is a supported target"
+                true? (t/supported-target? {:os :windows :arch :aarch64 :pointer-bits 64}))
+  ;; Adding one arch must not have widened the family. A 32-bit ARM Windows host
+  ;; still has no probed layouts, so it must still fail closed.
+  (c/check-throws "32-bit ARM Windows is still not silently given 64-bit layouts"
+                  {:jolt.net/kind :unsupported-target}
+                  #(t/descriptor {:os :windows :arch :arm :pointer-bits 32})))

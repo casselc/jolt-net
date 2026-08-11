@@ -4,6 +4,9 @@
  :socket-handle-bytes 8
  :socklen-bytes 4
  :nfds-bytes nil
+ :ioctl-cmd-bytes 4
+ :ioctl-arg-bytes 4
+ :wsapoll {:fds-bytes 4 :timeout-bytes 4 :result-bytes 4}
  :const {
   :af-unspec 0
   :af-inet 2
@@ -30,11 +33,23 @@
   :o-nonblock nil
   :f-getfl nil
   :f-setfl nil
+  :fionbio -2147195266
+  :pollin 768
+  :pollout 16
+  :pollerr 1
+  :pollhup 2
+  :pollnval 4
+  :pollrdnorm 256
+  :pollrdband 512
+  :pollpri 1024
+  :pollwrnorm 16
+  :pollwrband 32
  }
  :layout {
   :sockaddr-in {:size 16 :family 0 :port 2 :addr 4}
   :sockaddr-in6 {:size 28 :family 0 :port 2 :flowinfo 4 :addr 8 :scope-id 24}
   :sockaddr-storage {:size 128}
+  :wsapollfd {:size 16 :fd 0 :events 8 :revents 10 :fd-bytes 8 :events-bytes 2 :revents-bytes 2}
   :addrinfo {:size 48 :flags 0 :family 4 :socktype 8 :protocol 12 :addrlen 16 :canonname 24 :addr 32 :next 40 :addrlen-bytes 8}
   :sin-len? false
  }

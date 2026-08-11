@@ -8,13 +8,12 @@
      and collapsing them into throws is what forces callers into try/catch in
      their hot path.
 
-  2. CAPTURE PRECEDES CLEANUP. errno is valid only until the NEXT native call --
-     and close(), free(), and closesocket() are all native calls. A rollback that
-     runs before the read makes the caller report the cleanup's error instead of
-     the real one. That is not hypothetical: teensyp.ffi-net's constructors call
-     close before reading errno, so a failed bind can surface as whatever close
-     set. `checked` below makes the ordering structural rather than a convention
-     each call site has to remember."
+  2. RESULT AND ERROR STAY PAIRED. errno/Windows last-error is valid only until
+     intervening runtime or native work. Every sentinel-returning binding whose
+     error is consumed therefore returns `[result native-error]` atomically and
+     is interpreted by `checked-captured`. Rollback still follows capture, but
+     source-level adjacency to an error accessor is not the correctness
+     boundary."
   (:require [jolt.ffi :as ffi]
             [jolt.net.target :as t]
             [jolt.net.ffi :as nffi]))
@@ -33,16 +32,6 @@
 (defn eof? [x] (= x ::eof))
 (defn in-progress? [x] (= x ::in-progress))
 (defn connected? [x] (= x ::connected))
-
-;; --- capture ----------------------------------------------------------------
-(defn capture
-  "This thread's last native error code, RIGHT NOW.
-
-  Must be called immediately after the failing call, before anything else --
-  jolt.ffi/errno itself makes exactly one native call and no other, but any
-  cleanup the caller performs first will have overwritten the value."
-  []
-  (ffi/errno))
 
 ;; --- classification ---------------------------------------------------------
 ;; The kind set is deliberately small and closed (per the accepted design). It
@@ -123,31 +112,21 @@
                    :jolt.net/kind :invalid
                    :jolt.net/platform platform
                    :jolt.net/message msg}
-                  ctx)))
+                   ctx)))
 
-;; --- the ordering combinator ------------------------------------------------
-(defn checked
-  "Run `thunk`; if `fail?` says its result is a failure, capture the native error
-  IMMEDIATELY and throw.
+(defn checked-captured
+  "Interpret an atomic `[native-result native-error]` pair.
 
-  The capture is lexically the first thing after the result binding, with nothing
-  between them. Callers put rollback in a catch/finally, never in the failure
-  branch, so cleanup provably runs after the capture:
-
-      (let [h (checked :socket invalid? #(...) ctx)]
-        (try (checked :bind neg? #(...) ctx)
-             (transfer-ownership h)
-             (catch :default e (raw-close! h) (throw e))))
-
-  `ctx` must be an already-evaluated value, never an expression containing a
-  native call -- that would run between the failing call and the capture."
-  ([op fail? thunk] (checked op fail? thunk nil))
-  ([op fail? thunk ctx]
-   (let [r (thunk)]
-     (if (fail? r)
-       (let [code (capture)]        ;; nothing may be interposed here
-         (throw (native-ex op code ctx)))
-       r))))
+  This function never reads the thread's current native-error slot: the matching
+  code was captured inside the foreign return transition, before later runtime
+  or native work. The second element is ignored on success because native APIs
+  do not promise to clear stale error state."
+  ([op fail? captured] (checked-captured op fail? captured nil))
+  ([op fail? captured ctx]
+   (let [[result code] captured]
+     (if (fail? result)
+       (throw (native-ex op code ctx))
+       result))))
 
 ;; --- resolver errors --------------------------------------------------------
 ;; getaddrinfo returns its code DIRECTLY and does not set errno (except

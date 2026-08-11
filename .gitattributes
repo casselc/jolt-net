@@ -4,3 +4,8 @@
 *.clj text eol=lf
 *.sh  text eol=lf
 *.c   text eol=lf
+# Extensionless shell scripts are NOT matched by *.sh. Without this, a Windows
+# checkout silently CRLF-mangles bin/jnc's shebang line, and any POSIX shell
+# invoking it -- including socket-test's own SIGPIPE subprocess -- fails with
+# "Illegal option" or a bad-interpreter exec error instead of running.
+/bin/jnc text eol=lf

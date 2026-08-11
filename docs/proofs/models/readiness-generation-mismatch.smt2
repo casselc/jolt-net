@@ -1,9 +1,12 @@
 ; Claim: a readiness result captured for one descriptor generation is never
 ; dispatched to a later owner that reused the same fd integer.
 ;
-; The source-side oracle is jolt.net.poller/await-ready: after native poll it
-; looks up the current registration and compares the complete captured token.
-; This model isolates the generation arm of that equality.
+; The source-side oracle is jolt.net.poller/current-token?, which
+; jolt.net.poller/await-ready applies to every decoded entry: it looks up the
+; current registration and compares the complete captured token. This model
+; isolates the generation arm of that equality. Both readiness backends -- POSIX
+; poll and Windows WSAPoll -- funnel through that one function, so the claim is
+; not per-platform.
 ;
 ; Expected: unsat. The queried violation requires dispatch even though snapshot
 ; generation 9 differs from current generation 10.

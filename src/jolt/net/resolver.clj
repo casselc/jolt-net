@@ -48,6 +48,10 @@
   connection policies belong in a connector layer, not here."
   ([ep] (resolve ep {}))
   ([ep opts]
+   ;; getaddrinfo is itself a Winsock call on Windows -- it must never run
+   ;; before WSAStartup. socket-for's ensure-subsystem! call is too late here:
+   ;; listen/connect resolve the endpoint BEFORE they reach socket-for.
+   (nffi/ensure-subsystem!)
    (let [host (:jolt.net/host ep)
          port (:jolt.net/port ep)
          passive? (boolean (:passive? opts))
@@ -73,11 +77,13 @@
                           (if (addr/numeric-host? host) (t/const d :ai-numerichost) 0)))
        (ffi/write respp :pointer 0 ffi/null)
 
-       (let [rc (nffi/c-getaddrinfo node service hints respp)]
+       (let [[rc native-error]
+             (nffi/invoke-captured :getaddrinfo node service hints respp)]
          (when-not (zero? rc)
-           ;; EAI_SYSTEM defers to errno, so capture it immediately -- before the
-           ;; finally below runs any ffi/free, which would overwrite it.
-           (let [sys (when (= rc (t/gai-code d :system)) (err/capture))]
+           ;; EAI_SYSTEM defers to errno. `native-error` was captured in the
+           ;; foreign return transition, before collect-safe runtime
+           ;; reactivation or the finally below can overwrite it.
+           (let [sys (when (= rc (t/gai-code d :system)) native-error)]
              (throw (err/gai-ex rc sys ctx))))
 
          (let [head (ffi/read respp :pointer 0)]

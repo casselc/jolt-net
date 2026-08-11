@@ -35,6 +35,27 @@ remain out of scope. See
 `docs/PLATFORM-COVERAGE.md` for exactly what is verified on which platform —
 including what is *not*.
 
+The native Windows implementation is split into independently reviewable tasks
+in `docs/WINDOWS-RUNTIME-SEQUENCE.md`, including the exact PowerShell/Chez
+workflow and the evidence required before each capability is promoted.
+
+Both Windows architectures — **x86-64 and aarch64** — now run the same four
+native Winsock gates on real loopback sockets in hosted CI, with independently
+probed ABI descriptors. That is **source-mode** evidence: no packaged `joltc`
+and no AOT image has been built or tested on Windows ARM64, and the property
+layer does not run there. `docs/PLATFORM-COVERAGE.md` states each of those
+claims separately, and is the file to read rather than this paragraph.
+
+All six CI lanes — Linux x86_64/aarch64, macOS arm64/x86_64, and Windows
+x86-64/aarch64 — run on the same immutable, checksum-pinned Chez Scheme release
+(`chez-ci-10.4.1.1`) installed through `casselc/jolt-toolchains/setup-chez`.
+Nothing builds Chez from source, each target's archive is pinned to an explicit
+SHA-256, and there is no source-build fallback: a digest mismatch fails the job.
+Every target is requested at the `source-runtime` capability only, which is the
+boundary of what this project claims — a runnable Chez and its boot files, not
+the Chez kernel-development inputs. `docs/PLATFORM-COVERAGE.md` records the
+digests and the cold/warm CI evidence.
+
 ## Non-blocking connect
 
 The substrate keeps connection policy above native socket ownership:
@@ -61,30 +82,37 @@ Ownership transfers with both `net/connected` and `net/in-progress`; neither
 
 ## Requirements
 
-**jolt-net does not build on released `joltc` v0.4.15.** It currently pins the
-reviewed `casselc/jolt` proposal fork at
-`ecf7728f15d8b8f858327c47dbd8b751eb36798c` and depends on six primitives added
-there:
+This branch targets Jolt v0.7.1 plus three reviewed shared FFI capabilities. It
+does not preserve compatibility with older Jolt releases:
 
-- `(jolt.host/target)` — the target descriptor, for fail-closed platform tables;
-- `jolt.host/monotonic-nanos` — a real monotonic source for deadlines;
-- `jolt.ffi/errno` — immediate native error capture;
+- exact fail-closed socket ABI facts selected from upstream
+  `jolt.host/machine-type`;
+- upstream `System/nanoTime`, wrapped by `jolt.net.target/monotonic-nanos`, for
+  deadlines and deterministic test seams;
 - `:int16` / `:uint16` foreign types — `sockaddr` fields are 16-bit;
-- `jolt.ffi/with-byte-array-pointer` — a scoped, pinned pointer to any validated
-  array slice, so partial reads and writes do not allocate or copy.
-- `{:varargs-after n}` on `jolt.ffi/defcfn` — preserves the C variadic ABI
+- `jolt.ffi/with-byte-array-pointer` — a scoped copy-in/copy-back native buffer
+  over any validated array slice;
+- the upstream `:varargs` signature marker — preserves the C variadic ABI
   boundary even with a fully typed Jolt signature; required for `fcntl` on
   Apple arm64.
+- `{:capture-native-error true}` on `jolt.ffi/defcfn` — returns the native
+  result and its matching `errno`/Windows last-error value as one pair before a
+  return-boundary action, lazy resolution, cleanup, or another foreign call can
+  clobber the error slot.
 
-Run everything through `bin/jnc`, which pins the fork and fails with a readable
-message rather than an unbound-var error:
+The driver no longer consumes ambient `jolt.ffi/errno`; every failure sentinel
+whose error matters uses the atomically captured pair above.
+
+Run everything through `bin/jnc`. Set `JOLT_BIN` to test an unreleased runtime;
+otherwise it uses the installed `jolt` binary:
 
 ```sh
 bin/jnc -A:test -m hegel.install   # one-time: fetch libhegel for property tests
 bin/jnc -M:test                    # run the suite
 ```
 
-Point `JOLT_UPSTREAM` at your fork checkout if it is not the default.
+For example, `JOLT_BIN=/path/to/jolt bin/jnc -M:test` uses that exact binary for
+the parent suite and every subprocess witness.
 
 ## Design
 
@@ -95,9 +123,11 @@ decisions:
   `::in-progress` are tagged returns; only genuine failures throw, and they throw
   `ExceptionInfo` carrying a small closed `:kind` set plus the native `:code` —
   which is preserved even when no kind maps to it.
-- **Capture precedes cleanup.** `errno` is valid only until the next native call,
-  and `close()` is a native call. Every failure path reads the error before rolling
-  anything back. This is enforced structurally by a combinator, not by convention.
+- **A failure sentinel and its error are one result.** `errno`/Windows
+  last-error is valid only until intervening runtime or native work. Every
+  sentinel-returning call whose error is consumed uses an atomic
+  `[result native-error]` foreign return; only error-independent `close` remains
+  on the scalar dispatch surface.
 - **Handles are opaque and idempotently closed.** A raw descriptor is available for
   diagnostics but conveys no ownership. Short operation leases prevent native
   close while a syscall is using the descriptor, and close rejects new leases

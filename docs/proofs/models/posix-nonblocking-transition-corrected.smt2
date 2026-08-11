@@ -1,23 +1,27 @@
-; Claim: on Apple arm64 the fcntl binding declares its two-fixed-argument
-; variadic boundary, and no supposedly short non-blocking operation is admitted
-; unless a post-F_SETFL F_GETFL observes O_NONBLOCK.
+; POSIX claim: no descriptor is admitted to a supposedly short non-blocking
+; lease unless F_GETFL has read O_NONBLOCK back after F_SETFL, and the variadic
+; fcntl ABI boundary is declared.
 ;
-; Bounded domain: one transition, one handle mark, and one operation admission.
-; The model intentionally does not assume that a successful F_SETFL implies the
-; bit is present: nonblocking_observed remains free. That makes the read-back a
-; fail-closed guard even for a future toolchain, libc, or binding regression.
+; This model is intentionally POSIX-only. Unlike Winsock, production can inspect
+; the state of this exact descriptor before marking it. nonblocking_observed
+; remains FREE: if the bit is absent, the implementation fails closed and the
+; handle is never marked.
 ;
-; Expected: unsat. The asserted violation is either an ABI declaration mismatch
-; on the distinguishing target or a short operation admitted without the bit.
+; Bounded domain: one fcntl transition, one read-back, one handle mark, and one
+; short-operation admission.
+;
+; Expected: unsat. The asserted violation is either an undeclared variadic ABI
+; boundary on Apple arm64 or a short operation admitted while O_NONBLOCK is
+; absent.
 
 (set-option :produce-unsat-cores true)
 
 (declare-const apple_arm64 Bool)
 (declare-const c_function_is_variadic Bool)
 (declare-const varargs_boundary_declared Bool)
-(declare-const setfl_returned_success Bool)
+(declare-const transition_returned_success Bool)
 (declare-const nonblocking_observed Bool)
-(declare-const postcondition_checked Bool)
+(declare-const flag_readback_performed Bool)
 (declare-const handle_marked_nonblocking Bool)
 (declare-const short_operation_admitted Bool)
 (declare-const native_call_can_block Bool)
@@ -25,27 +29,27 @@
 (declare-const lease_violation Bool)
 (declare-const violation Bool)
 
-(assert (! apple_arm64 :named apple_arm64_is_the_distinguishing_target))
-(assert (! c_function_is_variadic :named fcntl_has_two_fixed_arguments_then_varargs))
+(assert (! transition_returned_success
+           :named successful_transition_path_is_in_domain))
 (assert (! varargs_boundary_declared
            :named binding_declares_varargs_after_two))
-(assert (! setfl_returned_success
-           :named successful_transition_path_is_in_domain))
-(assert (! postcondition_checked
-           :named f_getfl_readback_follows_f_setfl))
-
+(assert (! c_function_is_variadic
+           :named fcntl_has_two_fixed_arguments_then_varargs))
+(assert (! flag_readback_performed
+           :named posix_reads_flags_back_before_marking))
 (assert
   (! (= handle_marked_nonblocking
-        (and setfl_returned_success postcondition_checked
+        (and transition_returned_success
+             flag_readback_performed
              nonblocking_observed))
-     :named mark_iff_success_and_observed_postcondition))
+     :named mark_requires_success_and_observed_nonblocking_bit))
 (assert
   (! (= short_operation_admitted handle_marked_nonblocking)
      :named short_operation_requires_marked_handle))
 (assert
   (! (= native_call_can_block
         (and short_operation_admitted (not nonblocking_observed)))
-     :named absent_flag_is_the_blocking_hazard))
+     :named absent_nonblocking_mode_is_the_blocking_hazard))
 (assert
   (! (= declaration_violation
         (and apple_arm64 c_function_is_variadic

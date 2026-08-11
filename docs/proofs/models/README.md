@@ -23,13 +23,110 @@ were solver-checked with its local `z3-solver` package. The host did not have a
 standalone `z3` executable; Chiasmus verification, rather than the shell example
 above, is the recorded solver run.
 
+Three more files were added on 2026-07-24 for task W1
+(`docs/WINDOWS-RUNTIME-SEQUENCE.md`) and solver-checked the same way:
+`winsock-init-once-buggy.smt2`, `winsock-init-once-corrected.smt2`, and
+`winsock-init-once-nonvacuity.smt2`.
+
+Task W2 initially made the non-blocking transition model platform-neutral and
+brought the directory to 31 files. That run DID use a standalone solver:
+z3 5.0.0, installed into a throwaway directory and invoked exactly as the shell
+example above. All 31 files matched their declared verdicts.
+
+Independent source/model review then found that the combined model was stronger
+than production: it gated the Windows handle mark on later would-block evidence,
+while production marks immediately after successful `ioctlsocket`. The model
+family is now split into POSIX observable-readback and Windows conditional
+contract trios, bringing the directory to 33 files. On 2026-07-24 Chiasmus
+re-ran all six affected files: both `-corrected` models were `unsat`, and both
+`-buggy` plus both `-nonvacuity` controls were `sat`.
+
+Task W3 (`WSAPoll` readiness) added two files, bringing the directory to 35:
+`readiness-removed-registration.smt2` and `readiness-stale-dispatch-buggy.smt2`.
+The readiness family previously had two corrected models and a non-vacuity
+control but NO buggy control, so its `unsat` results were not yet demonstrably
+non-trivial; the new buggy control deletes exactly the token comparison and
+shows the stale dispatch becomes reachable.
+
+On 2026-07-25 all 35 files were run through a standalone `z3` 5.0.0, installed
+into a throwaway directory and invoked exactly as the shell example above. Every
+file matched its declared verdict: 13 `unsat` and 22 `sat`. The three
+pre-existing readiness models had their source anchors updated in the same task,
+because W3 moved the complete-token comparison out of the body of
+`jolt.net.poller/await-ready` into the named, separately callable
+`jolt.net.poller/current-token?`. That is a relocation of the anchor, not a
+change to what is claimed.
+
+Post-W3 review found a separate-check/CAS race in the internal wake-less
+adapter's close refusal. Three models now bring the directory to 38:
+`windows-wakeless-close-race-buggy.smt2`,
+`windows-wakeless-close-race-corrected.smt2`, and
+`windows-wakeless-close-race-nonvacuity.smt2`. Chiasmus linted all three with no
+errors and verified the buggy interleaving `sat`, the corrected violation query
+`unsat`, and useful close without an active await `sat`. The corrected core is
+`atomic_close_guard_definition`, `corrected_close_transition_definition`,
+`violation_definition`, and `property_violated`. The standalone-Z3 count above
+remains the exact evidence for Claude's original 35-file W3 tip; it is not
+retroactively described as a run of these three review additions.
+
+## Task W4: the Windows wake transport
+
+Task W4 gave the poller an owner-independent wake transport on Windows -- a
+connected IPv4 loopback datagram pair -- and promoted Windows through the public
+`jolt.net/open-poller`. Ten files were added, bringing the directory to 48.
+
+The organizing principle for the additions is that the POSIX and Windows
+transports differ in **exactly one premise**, and that premise is load-bearing:
+closing a POSIX pipe's write end makes the retained read end report `POLLHUP`,
+whereas retiring a connected datagram sender is *invisible* to its peer. The
+claims are therefore kept deliberately separate rather than merged into one
+"wake transport" family:
+
+| Concern | Files | Transport |
+|---|---|---|
+| generic writer admission and ordered retirement | `wake-pair-*` | both |
+| generic wake epoch and coalescing | `wake-epoch-*` | both |
+| receiver lease lifetime across a native wait | `wake-receiver-lease-*` | both |
+| close-completion ordering (publish before retire) | `close-completion-ordering-*` | both, decisive on Windows |
+| Windows datagram terminal-wake delivery | `windows-terminal-wake-*` | Windows only |
+| POSIX pipe hangup as a second, independent path | `posix-pipe-hangup-independence-control.smt2` | POSIX only |
+
+`wake-pair-*` and `wake-epoch-*` were **generalized, not rewritten**. Their
+premises -- one CAS admission gate shared with retirement, the handle lease
+released before the counted writer admission, and arithmetic over the poller's
+own epoch counter -- name no descriptor, syscall, or delivery guarantee, so they
+already held for both transports; only the POSIX-flavoured naming and the
+missing statement of what they do *not* cover were changed. Each file now says
+explicitly that sender-retirement observability and SIGPIPE are outside its
+scope.
+
+`windows-wakeless-close-race-*` is **retained unchanged in substance** and
+re-labelled. It is evidence about `jolt.net.poller/open-readiness-adapter`, the
+internal Windows poller built with no waker, which still exists and still
+refuses exactly as modelled. It is explicitly *not* evidence for the W4
+transport, and each file now says so.
+
+`wake-receiver-lease-corrected.smt2` records a defence-in-depth finding rather
+than a single guarantee: the receiver is protected both by close's ordering
+(retirement only from a lifecycle with no admitted await) and independently by
+the owned handle deferring its native close to the last lease releaser. **Either
+alone is sufficient** -- the corrected model is still `unsat` with either
+premise deleted, and only deleting both makes the violation reachable. That was
+checked rather than assumed, and the buggy control deletes both and says why.
+
+All 48 files were run through a standalone `z3` 5.0.0, installed into a
+throwaway directory and invoked exactly as the shell example above: 17 `unsat`
+and 31 `sat`, every file matching its declared verdict. The three new corrected
+models were additionally verified through Chiasmus, which returned identical
+`unsat` verdicts and identical unsat cores.
+
 ## Expected results
 
 | Model | Expected | Essential witness or unsat core |
 |---|---:|---|
-| `errno-capture-ordering-buggy.smt2` | `sat` | failure `1`, cleanup `2`, reported `2` |
-| `errno-capture-ordering-corrected.smt2` | `unsat` | `failing_call_sets_errno`, `capture_before_cleanup`, `property_violated` |
-| `errno-capture-ordering-nonvacuity.smt2` | `sat` | failure `1`, cleanup `2`, reported `1` |
+| `errno-capture-ordering-buggy.smt2` | `sat` | failure is positive, intervening return work leaves `0`, late capture reports `0` |
+| `errno-capture-ordering-corrected.smt2` | `unsat` | `failing_call_sets_errno`, `capture_in_foreign_return`, `reported_from_pair`, `property_violated` |
+| `errno-capture-ordering-nonvacuity.smt2` | `sat` | failure `1`, runtime reactivation `0`, captured pair still reports `1` |
 | `idempotent-close-buggy.smt2` | `sat` | both callers win; `close_count = 2` |
 | `idempotent-close-corrected.smt2` | `unsat` | `cas_atomicity`, `someone_closes`, `property_violated` |
 | `idempotent-close-nonvacuity.smt2` | `sat` | contention with exactly one CAS winner |
@@ -39,12 +136,30 @@ above, is the recorded solver run.
 | `readiness-generation-mismatch.smt2` | `unsat` | generation mismatch conflicts with complete-token dispatch |
 | `readiness-revision-mismatch.smt2` | `unsat` | revision mismatch conflicts with complete-token dispatch |
 | `readiness-current-token-nonvacuity.smt2` | `sat` | fd `8`, generation `10`, revision `3`, dispatch allowed |
-| `nonblocking-transition-buggy.smt2` | `sat` | fixed declaration, successful return, absent bit, marked handle, blocking-capable admission |
-| `nonblocking-transition-corrected.smt2` | `unsat` | explicit ABI boundary plus observed-bit mark postcondition exclude both violation branches |
-| `nonblocking-transition-nonvacuity.smt2` | `sat` | observed bit permits a marked handle and useful short operation |
+| `readiness-removed-registration.smt2` | `unsat` | `registration_removed_before_decode`, `dispatch_iff_present_and_token_matches`, `violation_iff_removed_registration_is_dispatched`, `property_violated` |
+| `readiness-stale-dispatch-buggy.smt2` | `sat` | descriptor `8` reused; generation `9 -> 10` and revision `3 -> 4` both dispatched because the token comparison is omitted |
+| `windows-wakeless-close-race-buggy.smt2` | `sat` | close observes no await, await enters before the CAS, and stale permission admits `:closing` with no wake transport |
+| `windows-wakeless-close-race-corrected.smt2` | `unsat` | the guard and CAS use one lifecycle value, so transition and active-await violation conflict |
+| `windows-wakeless-close-race-nonvacuity.smt2` | `sat` | with no admitted await, the wake-less adapter still transitions from `:open` to `:closing` |
+| `posix-nonblocking-transition-buggy.smt2` | `sat` | Apple arm64 witness: fixed declaration, successful return, absent bit, marked handle, blocking-capable admission |
+| `posix-nonblocking-transition-corrected.smt2` | `unsat` | variadic declaration plus per-handle `F_GETFL` read-back exclude both POSIX violation branches |
+| `posix-nonblocking-transition-nonvacuity.smt2` | `sat` | observed bit, marked handle, and useful short operation |
+| `windows-nonblocking-contract-buggy.smt2` | `sat` | FIONBIO succeeds with a zero `u_long` requesting blocking mode; production mark admits the still-blocking handle |
+| `windows-nonblocking-contract-corrected.smt2` | `unsat` | exact production mark ordering is safe conditional on the binding, command representation, nonzero `u_long`, and trusted Winsock semantics |
+| `windows-nonblocking-contract-nonvacuity.smt2` | `sat` | useful operation; production mark at step 1 precedes behavioral conformance evidence at step 2 |
 | `accept-terminal-close-buggy.smt2` | `sat` | pre-entry wake consumed; poller remains open; accept remains blocked after listener close |
 | `accept-terminal-close-corrected.smt2` | `unsat` | active await exits, late await is rejected, and no callback/native-close wait cycle exists |
 | `accept-terminal-close-nonvacuity.smt2` | `sat` | removal callback first; active await exits; listener close succeeds |
+| `windows-terminal-wake-buggy.smt2` | `sat` | the await's own pre-snapshot drain consumes close's terminal byte, then it parks with no hangup available |
+| `windows-terminal-wake-corrected.smt2` | `unsat` | `publish_follows_the_winning_transition`, `phase_check_follows_the_last_drain`, `await_parks_iff_it_read_an_open_lifecycle`, `byte_consumed_only_by_a_later_drain`, `byte_is_the_only_wake_and_it_is_level_triggered`, `stranded_iff_parked_unwakeable_while_close_waits`, `property_violated` |
+| `windows-terminal-wake-nonvacuity.smt2` | `sat` | a real park is really cancelled by the terminal byte, so the pre-entry check is not "never wait" |
+| `wake-receiver-lease-buggy.smt2` | `sat` | with BOTH guarantees deleted, the receiver's native close lands inside the wait |
+| `wake-receiver-lease-corrected.smt2` | `unsat` | `await_leases_across_the_wait_and_releases_before_exit`, `owned_handle_defers_native_close_until_the_last_lease`, `violation_iff_closed_before_the_wait_finished`, `property_violated` (still `unsat` with either guarantee alone) |
+| `wake-receiver-lease-nonvacuity.smt2` | `sat` | the receiver really is retired (no leak) after a wait that really held the lease |
+| `close-completion-ordering-buggy.smt2` | `sat` | admission retired before the terminal wake, so close reports completion having delivered nothing |
+| `close-completion-ordering-corrected.smt2` | `unsat` | `publish_precedes_admission_retirement`, `return_follows_the_closed_phase`, `delivery_iff_published_before_retirement`, `violation_iff_completed_without_wake_or_before_closed`, `property_violated` |
+| `close-completion-ordering-nonvacuity.smt2` | `sat` | close really completes, having really delivered a wake, from a really `:closed` lifecycle |
+| `posix-pipe-hangup-independence-control.smt2` | `sat` | the terminal byte is drained early and hangup ALONE still releases the await -- a POSIX-only path no Windows model may borrow |
 | `wake-pair-buggy.smt2` | `sat` | admit/read-close/write/release steps `0/2/3/4` |
 | `wake-pair-corrected.smt2` | `unsat` | CAS gate, lease-before-count release, drain, write-first/read-last |
 | `wake-pair-nonvacuity.smt2` | `sat` | writer crosses retirement, drains, and both ends close |
@@ -54,12 +169,16 @@ above, is the recorded solver run.
 | `connect-ownership-completion-buggy.smt2` | `sat` | `in_progress` returned with zero owners; native close step 2 precedes `getsockopt` step 3; completion takes close ownership |
 | `connect-ownership-completion-corrected.smt2` | `unsat` | returned ownership, rollback, completion preservation, and lease-drain facts exclude all four violation branches |
 | `connect-ownership-completion-nonvacuity.smt2` | `sat` | in-progress/refusal close race orders events `0/1/2/3/4` and retains one owner |
+| `winsock-init-once-buggy.smt2` | `sat` | two distinct gate entrants both win; `attempt_count = 2`; thrown attempt leaves outcome/delivery/terminal/completion false |
+| `winsock-init-once-corrected.smt2` | `unsat` | one CAS winner plus explicit outcome, delivery, terminal, completion, and observer definitions exclude the shared violation |
+| `winsock-init-once-nonvacuity.smt2` | `sat` | two distinct entrants, one winner, thrown exception normalized to one delivered terminal error observed by both |
 
 The full unsat cores observed in that run were:
 
 ```text
 errno corrected:
-  failing_call_sets_errno capture_before_cleanup property_violated
+  failing_call_sets_errno capture_in_foreign_return reported_from_pair
+  property_violated
 
 idempotent close corrected:
   cas_atomicity someone_closes property_violated
@@ -77,11 +196,19 @@ revision mismatch:
   revision_mismatch_iff_tokens_differ dispatch_iff_current_complete_token
   violation_iff_mismatch_is_dispatched property_violated
 
-nonblocking transition corrected:
+POSIX nonblocking transition corrected:
   binding_declares_varargs_after_two
-  mark_iff_success_and_observed_postcondition
+  mark_requires_success_and_observed_nonblocking_bit
   short_operation_requires_marked_handle declaration_violation_definition
   lease_violation_definition violation_definition property_violated
+
+Windows nonblocking contract corrected:
+  successful_transition_path_is_in_domain
+  binding_matches_ioctlsocket_header
+  command_argument_has_probed_long_width_and_fionbio_bits
+  argp_contains_fully_initialized_nonzero_u_long
+  trusted_winsock_fionbio_semantics documented_contract_effect
+  violation_definition property_violated
 
 accept terminal close corrected:
   listener_close_owns_the_transition accept_installs_terminal_callback
@@ -119,24 +246,77 @@ connect ownership/completion corrected:
   returned_owner_violation_definition rollback_violation_definition
   post_close_completion_violation_definition
   completion_owner_violation_definition violation_definition violation_query
+
+winsock init once corrected:
+  cas_at_most_one cas_has_a_winner attempt_count_definition
+  canonical_outcome_definition outcome_production_definition
+  delivery_definition terminal_definition completion_definition
+  t1_observation_definition t2_observation_definition
+  violation_definition violation_query
 ```
+
+Native Windows W1 supplies two concrete witnesses for the error-ordering
+abstraction. Before the generalized fix, a blocking refused connect lost
+`10061`; after only blocking calls were paired, the first ordinary duplicate
+bind lost `10048` while a later attempt happened to retain it. Revision
+`11142a3` routes every sentinel-returning call whose error is consumed through
+the captured-pair surface and passed both exact-code assertions in one native
+process.
 
 ## Source and runtime oracles
 
 The models deliberately stay small; the implementation and forced
 interleaving tests supply the semantic oracle:
 
+- `jolt.net.ffi/captured-call` contains every failure-sensitive blocking
+  binding, and `invoke-captured` has the single result shape
+  `[native-result native-error]`. `jolt.net.error/checked-captured`,
+  `jolt.net.poller/poll-once`, and `jolt.net.resolver/resolve` consume that pair
+  without a later error-slot read. The errno-ordering models treat this foreign
+  return as their `capture` event; Chez convention correctness is established
+  by the core fork's `docs/ffi-native-error-capture.md` and native controls, not
+  by these bounded models.
 - `jolt.net.handle/acquire!`, `release!`, and `close!` implement the
   open/admit, drain, and native-close transitions used by the lease models.
-- `jolt.net.poller/await-ready` compares the complete captured registration
-  token with the current token after native poll, corresponding to the
-  generation and revision models.
-- `jolt.net.ffi/p-fcntl` declares `{:varargs-after 2}`, and
+- `jolt.net.poller/current-token?` compares the complete captured registration
+  token with the current token, and `jolt.net.poller/await-ready` applies it to
+  every decoded entry after the native wait. That single function corresponds to
+  the generation, revision, removal, and stale-dispatch models. It is backend
+  independent: `jolt.net.readiness` supplies the native wait and the event
+  normalization for POSIX `poll` and Windows `WSAPoll` alike, but neither
+  backend may dispatch an event this gate rejects, so the readiness models are
+  not per-platform claims.
+- `jolt.net.readiness/backend` selects the per-target struct layout, flag
+  values, and captured-call op from the probed descriptor. The readiness models
+  say nothing about which native call ran; the Windows W3 gate
+  (`test/jolt/net/wsapoll_test_main.clj`) is the runtime oracle that real
+  `WSAPoll` events reach that gate and that stale tokens are rejected there.
+  Note the boundary these models do NOT cross: nothing here claims a mutation
+  can interrupt a native wait already in progress. On Windows there is no wake
+  transport until task W4, so removal and update invalidate DISPATCH only.
+- `jolt.net.poller/close!` checks the wake-less active-await refusal against the
+  exact lifecycle value supplied to its CAS. The three
+  `windows-wakeless-close-race-*` models cover the one-await interleaving that a
+  separate precheck admitted, the corrected conflict, and useful close with no
+  active await. The native W3 test parks one await at the call seam and requires
+  refusal to leave the adapter open before releasing and closing it normally.
+- `jolt.net.ffi/p-fcntl-with-error` declares the upstream `:varargs` boundary, and
   `jolt.net.nonblocking/set-raw!` reads `F_GETFL` back before any handle is
   marked. `test/jolt/net/poller_test.clj` independently observes the bit on a
   returned listener and injects the buggy control where `F_SETFL` appears to
   succeed but read-back still lacks the bit. These are the source and runtime
-  oracles for the non-blocking-transition models.
+  oracles for the POSIX half of the non-blocking-transition models.
+- `jolt.net.nonblocking/set-raw!` dispatches to `ioctlsocket(FIONBIO)` on
+  Windows, at the probed `u_long` width, and `postcondition-kind` returns
+  `:call-status` there because Winsock has no portable getter to read back.
+  The Windows corrected model is conditional on those probed ABI facts and the
+  documented Winsock contract; production marks immediately after the successful
+  return. The runtime gate supplies later cross-boundary conformance evidence:
+  `test/jolt/net/nonblocking_test_main.clj` requires `try-accept` with no
+  pending client, and a read with no pending data, to return `::would-block` as
+  a value. A descriptor still in blocking mode would park the thread, so that
+  suite's watchdog reports a timeout rather than a pass. It does not gate each
+  production mark or prove the behavior of every future handle.
 - `jolt.net/accept` installs a terminal listener before poller registration;
   `jolt.net.poller/close!` retires admission and waits for an active await to
   exit. `jolt.net.handle/release!` can release the await's listener lease while
@@ -159,10 +339,73 @@ interleaving tests supply the semantic oracle:
   absolute-deadline composition, lease drain, stale token filtering, forced
   write-vs-close retirement, and the enter/drain/reset wake race against the
   real implementation.
+- `jolt.net.ffi/ensure-once!` implements the nil-to-promise CAS gate, catches a
+  thrown attempt into the canonical error outcome, publishes terminal state,
+  delivers the promise, and only then resolves the winner's public call.
+  `ensure-subsystem!` supplies the process-global Winsock state and native
+  attempt. `jolt.net.resolver/resolve` calls it before `getaddrinfo`, which is
+  the source oracle for the ordering half of task W1. The runtime oracle first
+  exercises fresh-state returned-error and thrown-exception controls, then puts
+  32 distinct first-use futures behind a latch/start barrier and asserts exactly
+  one real `WSAStartup` attempt.
+
+Task W6A.1 (the jolt-tcp reactor re-arm latency) added three files, bringing the
+directory to 51: `wake-cursor-ordering-corrected.smt2` (**unsat**),
+`wake-cursor-ordering-buggy.smt2` (**sat**), and
+`wake-cursor-ordering-nonvacuity.smt2` (**sat**). The buggy model differs from the
+corrected one by exactly one assertion, the choice of stale/fresh boundary.
+
+That run used BOTH oracles, and they agreed. All 51 files were executed by a
+standalone `z3` 4.8.12 exactly as the shell example above, and every verdict
+matched its declared expectation. The three new files were additionally submitted
+to Chiasmus, which returned the same `unsat` (with a core naming
+`boundary_is_the_caller_cursor`), the same `sat` witness for the buggy model, and
+`sat` for non-vacuity.
+
+These three deliberately overlap `wake-epoch-*` without replacing it. The epoch
+trio proves transport coalescing across the drain/reset window; its violation is
+defined relative to await entry, so it cannot express a publication that is
+already visible when `await-ready` begins. That case is the wake-cursor trio's,
+and it is where the observed defect lived.
+
+## Task W7: native Windows ARM64, and why no model was added
+
+Task W7 promoted Windows/aarch64 from a preview artifact to a native socket
+runtime gate. It added **zero** files; the directory is still 51.
+
+That was a decision, not an oversight. W7 changes descriptor *selection* and
+platform *evidence*; it changes no lifecycle, readiness, or wake behavior, and
+no production source file outside one entry in the target table. Adding an
+`arm64-*` copy of an existing Windows family would assert an ARM64-specific
+semantics that was looked for and not found, and would make the file count grow
+without the verified set growing at all.
+
+What the models quantify over is argued in
+[`../socket-invariants.md`](../socket-invariants.md) under "Applicability: these
+models are keyed to an OS contract, not to an ISA". The short version: every
+Windows family is stated over CAS gates, lifecycle values, lease intervals,
+epoch counters, token pairs, and publish/retire orderings — none of which name
+an instruction set. The single architecture-sensitive premise belongs to
+`windows-nonblocking-contract-*`, and it is sensitive to numbers rather than to
+an ISA: the ARM64 probe reports the same `:ioctl-cmd-bytes 4`,
+`:ioctl-arg-bytes 4`, and `:fionbio -2147195266` the model was discharged
+against on x86-64.
+
+The complete suite was rerun for W7 rather than assumed still valid. All 51
+files were executed by a standalone `z3` 4.8.12 exactly as the shell example
+above: **18 `unsat` and 33 `sat`**, every file matching its declared verdict,
+with no file added, removed, or edited.
+
+W7.1 replaced a Windows test oracle that sampled numeric socket handle values
+with a live `GetProcessHandleCount` measurement. It adds no model: resource
+accounting by an operating-system process counter is native conformance
+evidence, and the correction changes no production transition or solver
+premise. The unchanged 51 files were rerun after the correction under standalone
+Z3 4.8.12 with the same **18 `unsat` / 33 `sat`** totals.
 
 The models omit scheduler fairness, native ABI implementation, weak-memory
-behavior beneath Clojure atom linearizability, kernel bugs, numeric descriptor
-allocation policy, and the
-unbounded number of producers or registrations. The implementation therefore
-still needs the runtime race tests and platform CI; these models do not replace
-them.
+behavior beneath Clojure atom linearizability, failure of the atom/promise
+primitives themselves, thread death/cancellation, kernel bugs, numeric
+descriptor allocation policy, and the unbounded number of producers or
+registrations. The implementation therefore still needs the runtime race tests
+and platform CI; these models do not replace them.

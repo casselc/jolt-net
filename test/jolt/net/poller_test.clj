@@ -37,12 +37,70 @@
       :else (do (Thread/sleep 2) (recur (dec remaining))))))
 
 (defn- remaining-ms [deadline]
-  (let [remaining (- deadline (jolt.host/monotonic-nanos))]
+  (let [remaining (- deadline (jolt.net.target/monotonic-nanos))]
     (if (pos? remaining)
       ;; ceil(ns / 1e6): truncating here could turn a still-live sub-millisecond
       ;; deadline into an accidental zero-timeout busy loop.
       (quot (+ remaining 999999) 1000000)
       0)))
+
+(defn- read-once-by!
+  "Complete one positive-length non-blocking read result, waiting only after
+  would-block and retrying under the caller's absolute monotonic deadline."
+  [poller socket dest offset length deadline]
+  (loop []
+    (let [result (net/try-read-bytes! socket dest offset length)]
+      (if (= net/would-block result)
+        (if (< (jolt.net.target/monotonic-nanos) deadline)
+          (do
+            (net/await-ready poller (remaining-ms deadline))
+            (recur))
+          net/would-block)
+        result))))
+
+(defn- read-exactly-by!
+  "Fill one destination window through arbitrary positive short reads."
+  [poller socket dest offset length deadline]
+  (loop [progress 0]
+    (if (= progress length)
+      progress
+      (let [result (read-once-by! poller socket dest (+ offset progress)
+                                  (- length progress) deadline)]
+        (cond
+          (= net/eof result) net/eof
+          (= net/would-block result) net/would-block
+          (and (integer? result) (pos? result))
+          (recur (+ progress result))
+          :else
+          (throw (ex-info "positive-length read made no progress"
+                          {:result result :progress progress})))))))
+
+(defn- write-exactly-by!
+  "Drain one source window through arbitrary positive short writes."
+  [socket src offset length deadline]
+  (let [poller (net/open-poller)]
+    (try
+      (net/register! poller socket #{:write})
+      (loop [progress 0]
+        (if (= progress length)
+          progress
+          (let [result (net/try-write-bytes! socket src (+ offset progress)
+                                             (- length progress))]
+            (cond
+              (= net/would-block result)
+              (if (< (jolt.net.target/monotonic-nanos) deadline)
+                (do
+                  (net/await-ready poller (remaining-ms deadline))
+                  (recur progress))
+                net/would-block)
+
+              (and (integer? result) (pos? result))
+              (recur (+ progress result))
+
+              :else
+              (throw (ex-info "positive-length write made no progress"
+                              {:result result :progress progress}))))))
+      (finally (net/close! poller)))))
 
 (defn- complete-connect-by!
   "The connector-layer composition this substrate is intended to enable:
@@ -54,7 +112,7 @@
     (try
       (net/register! p socket #{:write})
       (loop []
-        (if (<= deadline (jolt.host/monotonic-nanos))
+        (if (<= deadline (jolt.net.target/monotonic-nanos))
           ::deadline
           (let [ready (net/await-ready p (remaining-ms deadline))]
             (if (empty? ready)
@@ -70,10 +128,11 @@
   (let [listener (net/listen (net/endpoint "127.0.0.1" 0))
         d (net/target-descriptor)]
     (try
-      (let [flags (nffi/invoke :fcntl
-                               (net/native-handle listener)
-                               (get-in d [:const :f-getfl])
-                               0)]
+      (let [[flags _]
+            (nffi/invoke-captured :fcntl
+                                  (net/native-handle listener)
+                                  (get-in d [:const :f-getfl])
+                                  0)]
         (c/check "F_GETFL observes O_NONBLOCK before short leases are admitted"
                  true (nb/enabled? flags)))
       (finally (net/close! listener))))
@@ -84,22 +143,38 @@
         nonblock (get-in d [:const :o-nonblock])
         calls (atom [])]
     (c/check-throws
-      "apparent F_SETFL success fails closed when read-back lacks O_NONBLOCK"
-      {:jolt.net/op :fcntl-setfl
-       :jolt.net/kind :unsupported-target
-       :jolt.net/expected-flag nonblock
-       :jolt.net/observed-flags 0}
-      #(with-redefs
-         [nffi/invoke
-          (fn [op raw command arg]
-            (swap! calls conj [op raw command arg])
+     "apparent F_SETFL success fails closed when read-back lacks O_NONBLOCK"
+     {:jolt.net/op :fcntl-setfl
+      :jolt.net/kind :unsupported-target
+      :jolt.net/expected-flag nonblock
+      :jolt.net/observed-flags 0}
+     #(with-redefs
+       [nffi/invoke-captured
+        (fn [op raw command arg]
+          (swap! calls conj [op raw command arg])
             ;; Model the Darwin ABI failure that motivated the guard: F_SETFL
             ;; appears successful, but the third argument never takes effect.
-            0)]
-         (nb/set-raw! 73)))
+          [0 0])]
+        (nb/set-raw! 73)))
     (c/check "the fail-closed transition verifies after setting the flag"
              [getfl setfl getfl]
              (mapv #(nth % 2) @calls)))
+
+  (c/section "poll: atomic native-error pair")
+  (let [poll-once @#'poller/poll-once
+        expected (get-in (net/target-descriptor) [:errno :eintr])
+        invoked (atom nil)
+        observed
+        (with-redefs
+         [nffi/invoke-captured
+          (fn [op & args]
+            (reset! invoked [op args])
+            [-1 expected])]
+          (poll-once {} nil 3 25))]
+    (c/check "poll-once dispatches through the captured call table"
+             [:poll [nil 3 25]] @invoked)
+    (c/check "poll-once preserves the code paired with the failed result"
+             {:result -1 :code expected} observed))
 
   (c/section "non-blocking connect decision contract")
   (let [decide @#'net/connect-initiation-status
@@ -124,17 +199,17 @@
         visited (atom [])
         selected
         (advance
-          addresses
-          {}
-          (fn [address _]
-            (swap! visited conj (:id address))
-            (if (= 2 (:id address))
-              {:jolt.net/socket ::fake-socket
-               :jolt.net/status net/in-progress
-               :jolt.net/address address}
-              (throw (ex-info "candidate failed"
-                              {:jolt.net/op :connect
-                               :jolt.net/code (:id address)})))))]
+         addresses
+         {}
+         (fn [address _]
+           (swap! visited conj (:id address))
+           (if (= 2 (:id address))
+             {:jolt.net/socket ::fake-socket
+              :jolt.net/status net/in-progress
+              :jolt.net/address address}
+             (throw (ex-info "candidate failed"
+                             {:jolt.net/op :connect
+                              :jolt.net/code (:id address)})))))]
     (c/check "candidate attempts preserve resolver order"
              [1 2] @visited)
     (c/check "a selected attempt retains every untried candidate"
@@ -145,13 +220,13 @@
         data
         (try
           (advance
-            [{:id 10} {:id 20} {:id 30}]
-            {}
-            (fn [address _]
-              (swap! visited conj (:id address))
-              (throw (ex-info "real candidate failure"
-                              {:jolt.net/op :connect
-                               :jolt.net/code (:id address)}))))
+           [{:id 10} {:id 20} {:id 30}]
+           {}
+           (fn [address _]
+             (swap! visited conj (:id address))
+             (throw (ex-info "real candidate failure"
+                             {:jolt.net/op :connect
+                              :jolt.net/code (:id address)}))))
           (catch :default e (ex-data e)))]
     (c/check "all failed candidates are tried in resolver order"
              [10 20 30] @visited)
@@ -162,7 +237,7 @@
     (c/check-throws "a malformed resolved sockaddr fails before native use"
                     {:jolt.net/kind :invalid :jolt.net/op :connect}
                     #(net/try-connect
-                       (assoc resolved :jolt.net/sockaddr-len 0))))
+                      (assoc resolved :jolt.net/sockaddr-len 0))))
 
   (c/section "non-blocking connect completion and deadline composition")
   (let [listener (net/listen (net/endpoint "127.0.0.1" 0)
@@ -171,7 +246,7 @@
         attempt (net/try-connect (net/endpoint "127.0.0.1" port)
                                  {:no-delay? true})
         socket (:jolt.net/socket attempt)
-        deadline (+ (jolt.host/monotonic-nanos) 2000000000)]
+        deadline (+ (jolt.net.target/monotonic-nanos) 2000000000)]
     (try
       (c/check-throws "completion rejects a socket with no connect provenance"
                       {:jolt.net/kind :invalid
@@ -192,7 +267,7 @@
         (c/check "write readiness plus SO_ERROR completes the connection"
                  net/connected status)
         (c/check-pred "completion respected the caller's absolute deadline"
-                      #(< % deadline) (jolt.host/monotonic-nanos)))
+                      #(< % deadline) (jolt.net.target/monotonic-nanos)))
       (let [server (net/accept listener)]
         (try
           (c/check "completed socket reports the actual peer"
@@ -220,7 +295,7 @@
                  [(:jolt.net/op data) (:jolt.net/kind data)]))
       (let [attempt (:attempt result)
             socket (:jolt.net/socket attempt)
-            deadline (+ (jolt.host/monotonic-nanos) 2000000000)
+            deadline (+ (jolt.net.target/monotonic-nanos) 2000000000)
             data (try
                    (complete-connect-by! attempt deadline)
                    (catch :default e (ex-data e)))]
@@ -254,30 +329,42 @@
           after (net/native-handle after-socket)]
       (try
         (c/check-pred
-          (str "50 failed initiations leak no descriptors (before " before
-               ", after " after ")")
-          #(< % 10) (abs (- after before)))
+         (str "50 failed initiations leak no descriptors (before " before
+              ", after " after ")")
+         #(< % 10) (abs (- after before)))
         (finally (net/close! after-socket)))))
 
   (c/section "non-blocking byte I/O")
-  (let [[client server] (connected-pair)]
+  (let [[client server] (connected-pair)
+        p (net/open-poller)]
     (try
+      (net/register! p server #{:read})
       (let [dest (byte-array 6)
-            src (byte-array [10 20 30 40 50])]
+            src (byte-array [10 20 30 40 50])
+            transfer-deadline
+            (+ (jolt.net.target/monotonic-nanos) 2000000000)]
         (c/check "empty non-blocking read reports would-block"
                  net/would-block (net/try-read-bytes! server dest 0 6))
         (c/check "zero-length read is the only read that returns zero"
                  0 (net/try-read-bytes! server dest 0 0))
-        (c/check "slice write reports its byte count"
-                 3 (net/try-write-bytes! client src 1 3))
-        (c/check "slice read reports its byte count"
-                 3 (net/try-read-bytes! server dest 2 3))
+        (c/check "slice write completes through partial progress"
+                 3 (write-exactly-by! client src 1 3 transfer-deadline))
+        (c/check "slice read completes through partial progress"
+                 3 (read-exactly-by! p server dest 2 3 transfer-deadline))
         (c/check "read and write honor both array offsets"
                  [0 0 20 30 40 0] (vec dest))
         (net/shutdown! client :write)
+        ;; A successful peer send or shutdown orders that peer's stream, but
+        ;; neither synchronizes receiver readiness. Darwin may still report
+        ;; would-block until the bytes or FIN become readable.
         (c/check "shutdown-write is observed as the EOF value"
-                 net/eof (net/try-read-bytes! server dest 0 1)))
-      (finally (net/close! client) (net/close! server))))
+                 net/eof
+                 (read-once-by! p server dest 0 1
+                                (+ (jolt.net.target/monotonic-nanos) 2000000000))))
+      (finally
+        (net/close! p)
+        (net/close! client)
+        (net/close! server))))
 
   (c/section "short operation leases")
   (let [listener (net/listen (net/endpoint "127.0.0.1" 0))
@@ -367,11 +454,11 @@
     (c/check "close return means lifecycle and both wake handles are closed"
              [:closed true true]
              [(:phase @(:lifecycle poller))
-              (h/closed? (:wake-write poller))
-              (h/closed? (:wake-read poller))])
-    (let [start (jolt.host/monotonic-nanos)
+              (h/closed? (:write (:wake poller)))
+              (h/closed? (:read (:wake poller)))])
+    (let [start (jolt.net.target/monotonic-nanos)
           result (net/close! poller)
-          elapsed (- (jolt.host/monotonic-nanos) start)]
+          elapsed (- (jolt.net.target/monotonic-nanos) start)]
       (c/check "poller close is idempotent"
                false result)
       (c/check-pred "repeated close is nonblocking"
@@ -391,44 +478,80 @@
 
   (let [base (net/open-poller)
         waits (atom [])
+        now (atom 0)
         eintr (get-in (net/target-descriptor) [:errno :eintr])
         p (assoc base
+                 :jolt.net/monotonic-nanos #(deref now)
                  :jolt.net/poll-call
                  (fn [_ _ wait-ms]
                    (let [calls (swap! waits conj wait-ms)]
                      (if (= 1 (count calls))
                        (do
-                         (Thread/sleep 60)
+                         (reset! now 60000000)
                          {:result -1 :code eintr})
                        (do
-                         (Thread/sleep wait-ms)
+                         (reset! now 120000000)
                          {:result 0})))))]
     (try
       (c/check "EINTR retry preserves the await result"
                [] (net/await-ready p 120))
       (c/check-pred "EINTR retry uses the remaining absolute deadline"
                     (fn [observed]
-                      (and (<= 2 (count observed))
-                           (< (apply max (rest observed))
-                              (first observed))))
+                      (= [120 60] observed))
                     @waits)
       (finally (net/close! p))))
 
   (let [base (net/open-poller)
         calls (atom 0)
+        now (atom 0)
         eintr (get-in (net/target-descriptor) [:errno :eintr])
         p (assoc base
+                 :jolt.net/monotonic-nanos #(deref now)
                  :jolt.net/poll-call
                  (fn [_ _ _]
                    (swap! calls inc)
-                   ;; Cross the caller's absolute deadline inside poll(2).
-                   (Thread/sleep 20)
+                   ;; Cross the caller's absolute deadline inside poll(2),
+                   ;; without depending on scheduler timing.
+                   (reset! now 2000000)
                    {:result -1 :code eintr}))]
     (try
       (c/check "deadline-expired EINTR is an empty timeout"
                [] (net/await-ready p 1))
       (c/check "deadline-expired EINTR is not retried forever"
                1 @calls)
+      (finally (net/close! p))))
+
+  (c/section "deadline clock discriminator")
+  ;; The no-seam fallback must read the CURRENT host clock symbol
+  ;; (jolt.net.target/monotonic-nanos), not the removed fork-only jolt.host/monotonic-nanos.
+  ;; Rebinding the current symbol and driving a deadline through the fallback
+  ;; proves which symbol the executable calls: a stale reference would ignore
+  ;; the rebinding and read the real clock, so the controlled EINTR retry would
+  ;; not observe the remaining-time window below.
+  (let [base (net/open-poller)
+        waits (atom [])
+        now (atom 0)
+        eintr (get-in (net/target-descriptor) [:errno :eintr])
+        p (assoc base
+                 :jolt.net/monotonic-nanos nil  ; force the host fallback
+                 :jolt.net/poll-call
+                 (fn [_ _ wait-ms]
+                   (let [calls (swap! waits conj wait-ms)]
+                     (if (= 1 (count calls))
+                       (do
+                         (reset! now 60000000)
+                         {:result -1 :code eintr})
+                       (do
+                         (reset! now 120000000)
+                         {:result 0})))))]
+    (try
+      (with-redefs [jolt.net.target/monotonic-nanos (fn [] @now)]
+        (c/check "the deadline fallback reads the current host clock symbol"
+                 [] (net/await-ready p 120))
+        (c/check-pred "the fallback clock drives the remaining-time window"
+                      (fn [observed]
+                        (= [120 60] observed))
+                      @waits))
       (finally (net/close! p))))
 
   (let [base (net/open-poller)
@@ -496,26 +619,99 @@
       (c/check "close cannot pass an admitted wake writer"
                ::still-closing (deref closing 20 ::still-closing))
       (c/check "pipe read end stays open until admitted wake writers drain"
-               false (h/closed? (:wake-read p)))
+               false (h/closed? (:read (:wake p))))
       (poller/release-wake-write! p writer)
       (reset! released? true)
       (c/check "close completes after the admitted writer releases"
                true (deref closing 500 ::timed-out))
       (c/check "write end retires before the read end"
                [true true]
-               [(h/closed? (:wake-write p)) (h/closed? (:wake-read p))])
+               [(h/closed? (:write (:wake p))) (h/closed? (:read (:wake p)))])
       (finally
         (when-not @released?
           (poller/release-wake-write! p writer))
-        (net/close! p)))))
+        (net/close! p))))
+
+  ;; Force the terminal-wake/receiver-retirement race that previously escaped
+  ;; as EPIPE on Linux.  The held writer keeps the winning close! behind its
+  ;; writer-drain boundary, while close's ordinary clear wake lets the active
+  ;; await return.  Once that future has returned, exit-await! has completed;
+  ;; the read end must nevertheless remain owned until the held writer drains
+  ;; and the winning close performs the sole finalization.
+  (let [p (net/open-poller)
+        writer (poller/acquire-wake-write! p)
+        released? (atom false)]
+    (try
+      (c/check-pred "a wake writer is admitted before the terminal await"
+                    some? writer)
+      (let [waiting (future (net/await-ready p 2500))]
+        (c/check "terminal-race await entered before close"
+                 true (wait-for-await! p))
+        (let [closing (future (net/close! p))]
+          (c/check "the ordinary close wake releases the await"
+                   [] (deref waiting 500 ::timed-out))
+          (c/check "close remains behind the admitted writer"
+                   ::still-closing (deref closing 20 ::still-closing))
+          (c/check "an exited await did not retire the pipe receiver"
+                   false (h/closed? (:read (:wake p))))
+          (poller/release-wake-write! p writer)
+          (reset! released? true)
+          (c/check "terminal close completes after the writer drains"
+                   true (deref closing 500 ::timed-out))
+          (c/check "terminal close retires both pipe handles"
+                   [true true]
+                   [(h/closed? (:write (:wake p)))
+                    (h/closed? (:read (:wake p)))])))
+      (finally
+        (when-not @released?
+          (poller/release-wake-write! p writer))
+        (net/close! p))))
+
+  (c/section "poller terminal-wake invariant failures")
+  ;; Corrupt each internal ownership premise deliberately. Close must still
+  ;; finish teardown, but it must not report success after omitting the
+  ;; terminal publication that is Windows' only cancellation guarantee.
+  (let [p (net/open-poller)]
+    (try
+      (c/check "the corruption control prematurely retires the sender"
+               true (h/close! (:write (:wake p))))
+      (c/check-throws
+       "close reports an unexpectedly retired sender"
+       {:jolt.net/kind :invalid :jolt.net/op :use-after-close}
+       #(net/close! p))
+      (c/check "sender failure is deferred until teardown completes"
+               [:closed true true]
+               [(:phase @(:lifecycle p))
+                (h/closed? (:write (:wake p)))
+                (h/closed? (:read (:wake p)))])
+      (finally (net/close! p))))
+
+  (let [p (net/open-poller)]
+    (try
+      (reset! (:wake-admission p) {:phase :retired :writers 0})
+      (c/check-throws
+       "close rejects terminal publication after premature admission retirement"
+       {:jolt.net/kind :invalid
+        :jolt.net/op :wake
+        :jolt.net/invariant :terminal-wake-before-admission-retirement}
+       #(net/close! p))
+      (c/check "admission failure is deferred until teardown completes"
+               [:closed true true]
+               [(:phase @(:lifecycle p))
+                (h/closed? (:write (:wake p)))
+                (h/closed? (:read (:wake p)))])
+      (finally (net/close! p)))))
 
 (defn run! []
-  (if (contains? #{:linux :darwin} (:os (jolt.host/target)))
+  ;; Windows joined the readiness runtime in task W4. The gate below must name
+  ;; the CURRENT set: continuing to assert that Windows fails closed here would
+  ;; assert a boundary that no longer exists.
+  (if (contains? #{:linux :darwin :windows} (:os (jolt.net.target/current-target)))
     (run-posix!)
     (do
       (c/section "non-blocking I/O and poller platform gate")
-      (c/check-throws "the readiness runtime fails closed off POSIX"
+      (c/check-throws "the readiness runtime fails closed off supported targets"
                       {:jolt.net/kind :unsupported-target}
                       #(net/open-poller))
       (c/skip "non-blocking I/O and poller runtime checks"
-              "this slice has a POSIX runtime implementation only"))))
+              "this target has no readiness runtime"))))
