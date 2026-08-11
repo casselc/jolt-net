@@ -131,7 +131,7 @@ interleaving tests supply the semantic oracle:
 - `jolt.net.poller/await-ready` compares the complete captured registration
   token with the current token after native poll, corresponding to the
   generation and revision models.
-- `jolt.net.ffi/p-fcntl` declares `{:varargs-after 2}`, and
+- `jolt.net.ffi/p-fcntl` declares `[:int :int :varargs :int]`, and
   `jolt.net.nonblocking/set-raw!` reads `F_GETFL` back before any handle is
   marked. `test/jolt/net/poller_test.clj` independently observes the bit on a
   returned listener and injects the buggy control where `F_SETFL` appears to

@@ -182,7 +182,8 @@ returned after deferring native close, but the accept could neither return nor
 release the lease. This was the missing premise in the earlier accept analysis,
 not a counterexample to the poller-close ordering once await had actually begun.
 
-The core fork now exposes `{:varargs-after 2}` on `jolt.ffi/defcfn`, which lowers
+Upstream Jolt now exposes an in-signature `:varargs` boundary marker on
+`jolt.ffi/defcfn`, which lowers
 to Chez's `(__varargs_after 2)` convention. jolt-net additionally reads
 `F_GETFL` after `F_SETFL` and does not mark or return a handle unless
 `O_NONBLOCK` is observable. The read-back is intentionally retained even with

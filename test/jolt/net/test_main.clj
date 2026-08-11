@@ -6,6 +6,7 @@
   starts sockets or futures can leave non-daemon threads alive, which would hang
   the process after the last test printed PASS."
   (:require [jolt.net.check :as c]
+            [jolt.net.target :as target]
             [jolt.net.target-test :as target-test]
             [jolt.net.socket-test :as socket-test]
             [jolt.net.poller-test :as poller-test]
@@ -15,24 +16,28 @@
 
 (defn -main [& _]
   (println "jolt-net test suite")
-  (println (str "target: " (jolt.host/target)))
+  (println (str "target: " (target/current-target)))
   (println (str "errno-source: " (jolt.ffi/errno-source)))
-  (println (str "monotonic-source: " (jolt.host/monotonic-source)))
+  (println "monotonic-source: System/nanoTime")
 
   (c/section "scaffold")
-  ;; The scaffold's own gate: prove we are running on the fork, not stock joltc.
-  ;; Every later namespace depends on these three, so failing here first gives a
+  ;; Prove the selected Jolt runtime has every required capability. Every later
+  ;; namespace depends on these facts, so failing here first gives a
   ;; readable diagnosis instead of an unbound-var deep in a socket call.
-  (c/check-pred "jolt.host/target resolves an os"
+  (c/check-pred "jolt.net target resolves an os"
                 #(contains? #{:linux :darwin :windows} %)
-                (:os (jolt.host/target)))
-  (c/check-pred "jolt.host/target reports pointer width"
+                (:os (target/current-target)))
+  (c/check-pred "jolt.net target reports pointer width"
                 #(or (= 32 %) (= 64 %))
-                (:pointer-bits (jolt.host/target)))
+                (:pointer-bits (target/current-target)))
   (c/check-pred "fork prerequisite: jolt.ffi/errno is available"
                 some? (jolt.ffi/errno-source))
-  (c/check-pred "fork prerequisite: a real monotonic clock backs deadlines"
-                #(= :monotonic %) (jolt.host/monotonic-source))
+  (c/check-pred "upstream System/nanoTime is monotonic"
+                (fn [[a b]] (<= a b)) [(System/nanoTime) (System/nanoTime)])
+  (c/check-pred "upstream System/nanoTime has sub-millisecond resolution"
+                true?
+                (some (fn [_] (pos? (rem (System/nanoTime) 1000000)))
+                      (range 200)))
   (c/check-pred "fork prerequisite: 16-bit foreign types exist"
                 #(= 2 %) (jolt.ffi/sizeof :uint16))
 

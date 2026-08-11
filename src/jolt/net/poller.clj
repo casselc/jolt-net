@@ -24,10 +24,10 @@
                        ": the poller runtime is POSIX-only in this slice")
                   {:jolt.net/op op
                    :jolt.net/kind :unsupported-target
-                   :jolt.net/target (jolt.host/target)})))
+                   :jolt.net/target (t/current-target)})))
 
 (defn- require-posix! [op]
-  (when-not (contains? #{:linux :darwin} (:os (jolt.host/target)))
+  (when-not (contains? #{:linux :darwin} (:os (t/current-target)))
     (unsupported! op)))
 
 (defn- take-mutations! [poller]
@@ -538,12 +538,12 @@
                 (ffi/write p :int16 (:events layout)
                            (interest-mask (:interests entry)))
                 (ffi/write p :int16 (:revents layout) 0)))
-            (let [deadline (+ (jolt.host/monotonic-nanos)
+            (let [deadline (+ (System/nanoTime)
                               (* timeout-ms 1000000))
                   poll-result
                   (loop []
                     (let [remaining (max 0 (- deadline
-                                              (jolt.host/monotonic-nanos)))
+                                              (System/nanoTime)))
                           remaining-ms (quot (+ remaining 999999) 1000000)
                           wait-ms (min remaining-ms max-native-wait-ms)
                           outcome (poll-once poller buf n wait-ms)
@@ -554,7 +554,7 @@
                           ;; A signal does not consume the caller's timeout.
                           ;; Retry against the same absolute monotonic deadline.
                           (if (= code (t/errno-code d :eintr))
-                            (if (< (jolt.host/monotonic-nanos) deadline)
+                            (if (< (System/nanoTime) deadline)
                               (recur)
                               ;; poll may leave revents undefined on failure.
                               ;; A deadline-expired interruption is therefore a
@@ -566,7 +566,7 @@
                         ;; return from the caller's timeout.
                         (and (zero? result)
                              (pos? remaining)
-                             (< (jolt.host/monotonic-nanos) deadline))
+                             (< (System/nanoTime) deadline))
                         (recur)
 
                         :else result)))]

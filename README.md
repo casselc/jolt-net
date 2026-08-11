@@ -61,30 +61,30 @@ Ownership transfers with both `net/connected` and `net/in-progress`; neither
 
 ## Requirements
 
-**jolt-net does not build on released `joltc` v0.4.15.** It currently pins the
-reviewed `casselc/jolt` proposal fork at
-`ecf7728f15d8b8f858327c47dbd8b751eb36798c` and depends on six primitives added
-there:
+This branch targets Jolt v0.7.1 plus three reviewed fork capabilities. It does
+not preserve compatibility with older Jolt releases:
 
-- `(jolt.host/target)` — the target descriptor, for fail-closed platform tables;
-- `jolt.host/monotonic-nanos` — a real monotonic source for deadlines;
-- `jolt.ffi/errno` — immediate native error capture;
+- `(jolt.net/target-descriptor)` — exact fail-closed socket ABI facts selected
+  from upstream Jolt's `jolt.host/machine-type`;
+- upstream `System/nanoTime` — a real monotonic source for deadlines;
+- `jolt.ffi/errno` and atomic native-error capture — exact native failures;
 - `:int16` / `:uint16` foreign types — `sockaddr` fields are 16-bit;
-- `jolt.ffi/with-byte-array-pointer` — a scoped, pinned pointer to any validated
-  array slice, so partial reads and writes do not allocate or copy.
-- `{:varargs-after n}` on `jolt.ffi/defcfn` — preserves the C variadic ABI
+- `jolt.ffi/with-byte-array-pointer` — a scoped copy-in/copy-back native buffer
+  for any validated array slice;
+- the upstream `:varargs` boundary marker in `jolt.ffi/defcfn` signatures — preserves the C variadic ABI
   boundary even with a fully typed Jolt signature; required for `fcntl` on
   Apple arm64.
 
-Run everything through `bin/jnc`, which pins the fork and fails with a readable
-message rather than an unbound-var error:
+Run everything through `bin/jnc`. Set `JOLT_BIN` to test an unreleased compiler;
+otherwise it uses the installed `jolt` binary:
 
 ```sh
 bin/jnc -A:test -m hegel.install   # one-time: fetch libhegel for property tests
 bin/jnc -M:test                    # run the suite
 ```
 
-Point `JOLT_UPSTREAM` at your fork checkout if it is not the default.
+For example, `JOLT_BIN=/path/to/jolt bin/jnc -M:test` uses that exact native
+binary for the parent suite and every subprocess witness.
 
 ## Design
 

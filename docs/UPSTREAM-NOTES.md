@@ -4,23 +4,23 @@ jolt-net is written to move into the jolt stdlib as `jolt.net`. This file record
 what that move depends on, and where jolt-net deliberately departs from the
 accepted design spike.
 
-## Fork prerequisites
+## Jolt v0.7.1 capability boundary
 
-jolt-net cannot load on released `joltc` v0.4.15. It requires six primitives added
-on the fork branch `codex/upstream-improvements-6-8`:
+Jolt v0.7.1 supplies exact machine tags, a real monotonic clock, and the current
+variadic-signature marker. This branch adds only the shared FFI capabilities
+that remain absent upstream:
 
 | Primitive | Commit | Why jolt-net needs it |
 |---|---|---|
-| `jolt.host/target` | `3105198a` | Select exact fail-closed ABI facts instead of inferring them from the build host. |
-| `jolt.host/monotonic-nanos`, `System/nanoTime` over a real monotonic clock | `1670dfde` | Deadlines. The previous `nanoTime` was `currentTimeMillis * 1e6` — wall-clock and millisecond-truncated, so it could step backwards and could not resolve a sub-millisecond interval at all. |
-| `:int16` / `:uint16` / `:short` / `:ushort` foreign types | `55160f2c` | `sockaddr_in.sin_family` and the `sockaddr_in6` fields are 16-bit. Without them the only option was the endian-dependent short-packing hack in `teensyp.ffi-net`. |
-| `jolt.ffi/errno` | `5422ee9d` | The whole error contract rests on reading the native error before any other native call. |
-| `jolt.ffi/with-byte-array-pointer` | `1c8fdb97` | Pins a validated interior array slice for one callback, eliminating partial-I/O allocation and copying without exposing an unsafe retained pointer. |
-| `{:varargs-after n}` on `jolt.ffi/defcfn` | `ecf7728f` | Lowers an explicit fixed/variadic boundary to Chez. Apple arm64 passes `fcntl`'s third argument according to the variadic ABI even though its Jolt type is known. |
+| `jolt.host/machine-type` | upstream v0.7.1 | Select exact fail-closed ABI facts in jolt-net without requiring the fork-only `jolt.host/target` projection. |
+| `System/nanoTime` over a real monotonic clock | upstream v0.7.1 | Deadlines need monotonic, sub-millisecond time. Upstream now supplies it directly, so jolt-net no longer needs the fork-only `jolt.host/monotonic-nanos` alias. |
+| `:int16` / `:uint16` / `:short` / `:ushort` foreign types | `2436a7f7` | `sockaddr_in.sin_family` and the `sockaddr_in6` fields are 16-bit. Without them the only option was an endian-dependent short-packing workaround. |
+| atomic native-error capture and `jolt.ffi/errno` | `423cd84d` | The error contract must pair the native result with the error slot before any later native work can overwrite it. |
+| `jolt.ffi/with-byte-array-pointer` | `38e43b11` | Provides a validated synchronous native buffer for partial I/O, with exact signed-byte copy-in/copy-back and no retained unsafe pointer. |
+| `:varargs` marker in a `jolt.ffi/defcfn` signature | upstream v0.7.1 | Lowers an explicit fixed/variadic boundary to Chez. Apple arm64 passes `fcntl`'s third argument according to the variadic ABI even though its Jolt type is known. |
 
-These live in the proposed fork rather than inside jolt-net because each is a
-shared FFI/host platform concern. Nothing in this branch has been pushed to the
-core project's origin.
+The three fork additions remain in Jolt because they are shared FFI/host
+capabilities, not networking policy.
 
 ## Hard runtime prerequisite: lazy `defcfn`
 

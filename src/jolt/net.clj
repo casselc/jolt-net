@@ -106,10 +106,10 @@
 (def ^:private poller-targets #{:linux :darwin})
 
 (defn- posix-nonblocking-runtime? []
-  (contains? posix-nonblocking-targets (:os (jolt.host/target))))
+  (contains? posix-nonblocking-targets (:os (t/current-target))))
 
 (defn- poller-runtime? []
-  (contains? poller-targets (:os (jolt.host/target))))
+  (contains? poller-targets (:os (t/current-target))))
 
 (defn- require-posix-nonblocking-runtime! [op]
   (when-not (posix-nonblocking-runtime?)
@@ -117,7 +117,7 @@
                          ": the non-blocking runtime is POSIX-only in this slice")
                     {:jolt.net/op op
                      :jolt.net/kind :unsupported-target
-                     :jolt.net/target (jolt.host/target)}))))
+                     :jolt.net/target (t/current-target)}))))
 
 (defn- with-nonblocking-lease [sock f]
   (require-posix-nonblocking-runtime! :set-nonblocking)
