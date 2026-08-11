@@ -784,7 +784,9 @@ jobs:
       - name: Verify native target and descriptor selection
         shell: pwsh
         env:
-          JOLT_PWD: ${{ github.workspace }}
+          # The source runtime is the current directory. Use its parent as the
+          # project coordinate because v0.7.1 misjoins drive-qualified paths.
+          JOLT_PWD: ..
           JOLT_AOT_CACHE: 0
         run: |
           $env:JOLT_SH = $env:JOLT_NET_SH
