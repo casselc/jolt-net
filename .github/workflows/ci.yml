@@ -784,13 +784,17 @@ jobs:
       - name: Verify native target and descriptor selection
         shell: pwsh
         env:
-          # The source runtime is the current directory. Use its parent as the
-          # project coordinate because v0.7.1 misjoins drive-qualified paths.
-          JOLT_PWD: ..
           JOLT_AOT_CACHE: 0
         run: |
           $env:JOLT_SH = $env:JOLT_NET_SH
           $runtime = Join-Path $env:GITHUB_WORKSPACE 'jolt-upstream'
+          $workspace = Resolve-Path $env:GITHUB_WORKSPACE
+          $runtimePath = Resolve-Path $runtime
+          if ($workspace.Drive.Name -ne $runtimePath.Drive.Name) {
+            throw "Jolt v0.7.1 requires workspace and runtime on the same volume"
+          }
+          $workspaceTail = $workspace.Path.Substring($workspace.Drive.Root.Length).Replace("\", "/")
+          $env:JOLT_PWD = "/$workspaceTail"
           $script = Join-Path $env:GITHUB_WORKSPACE 'test\jolt\net\windows_arm64_runtime.clj'
           Push-Location $runtime
           try {

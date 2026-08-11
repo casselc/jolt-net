@@ -68,16 +68,15 @@ if ($TimeoutSeconds -le 0) {
   throw "test-windows-poller-wake.ps1: TimeoutSeconds must be positive"
 }
 
-# Jolt v0.7.1 joins a drive-qualified JOLT_PWD to its current directory.
-# Pass the same project relative to the source-runtime checkout instead.
-$runtimeUri = [Uri]((Resolve-Path $RuntimePath).Path.TrimEnd("\") + "\")
-$projectUri = [Uri]((Resolve-Path $JoltNetPath).Path.TrimEnd("\") + "\")
-$relativeUri = $runtimeUri.MakeRelativeUri($projectUri)
-if ($relativeUri.IsAbsoluteUri) {
+# Jolt v0.7.1 prefixes both drive-qualified and relative JOLT_PWD values when
+# it opens deps.edn. Use a leading-slash path rooted on the current drive.
+$runtime = Resolve-Path $RuntimePath
+$project = Resolve-Path $JoltNetPath
+if ($runtime.Drive.Name -ne $project.Drive.Name) {
   throw "Jolt v0.7.1 requires JoltNetPath and RuntimePath on the same volume"
 }
-$env:JOLT_PWD = [Uri]::UnescapeDataString($relativeUri.ToString()).TrimEnd("/")
-if (-not $env:JOLT_PWD) { $env:JOLT_PWD = "." }
+$projectTail = $project.Path.Substring($project.Drive.Root.Length).Replace("\", "/")
+$env:JOLT_PWD = "/$projectTail"
 # Never reuse an AOT artifact across revisions: a stale cache could validate an
 # older source revision under this revision's name, which is the one failure
 # mode a green gate must not be able to have.
