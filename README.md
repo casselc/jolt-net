@@ -82,18 +82,17 @@ Ownership transfers with both `net/connected` and `net/in-progress`; neither
 
 ## Requirements
 
-**jolt-net currently targets the reviewed proposal core based on upstream Jolt
-v0.5.20.** It pins
-`9fc64f93eba8b56a319f91bb1a322e2efced9c70` on
-`codex/upstream-rebase-v0.5.20`. Deadlines use upstream's public
-`jolt.host/mono-nanos`; five additional shared host/FFI features remain on the
-proposal branch:
+This branch targets Jolt v0.7.1 plus three reviewed shared FFI capabilities. It
+does not preserve compatibility with older Jolt releases:
 
-- `(jolt.host/target)` — the target descriptor, for fail-closed platform tables;
+- exact fail-closed socket ABI facts selected from upstream
+  `jolt.host/machine-type`;
+- upstream `System/nanoTime`, wrapped by `jolt.net.target/monotonic-nanos`, for
+  deadlines and deterministic test seams;
 - `:int16` / `:uint16` foreign types — `sockaddr` fields are 16-bit;
-- `jolt.ffi/with-byte-array-pointer` — a scoped pointer loan over any validated
-  array slice, with bounded snapshot/copy-back ownership around the native call.
-- `{:varargs-after n}` on `jolt.ffi/defcfn` — preserves the C variadic ABI
+- `jolt.ffi/with-byte-array-pointer` — a scoped copy-in/copy-back native buffer
+  over any validated array slice;
+- the upstream `:varargs` signature marker — preserves the C variadic ABI
   boundary even with a fully typed Jolt signature; required for `fcntl` on
   Apple arm64.
 - `{:capture-native-error true}` on `jolt.ffi/defcfn` — returns the native
@@ -104,15 +103,16 @@ proposal branch:
 The driver no longer consumes ambient `jolt.ffi/errno`; every failure sentinel
 whose error matters uses the atomically captured pair above.
 
-Run everything through `bin/jnc`, which pins the fork and fails with a readable
-message rather than an unbound-var error:
+Run everything through `bin/jnc`. Set `JOLT_BIN` to test an unreleased runtime;
+otherwise it uses the installed `jolt` binary:
 
 ```sh
 bin/jnc -A:test -m hegel.install   # one-time: fetch libhegel for property tests
 bin/jnc -M:test                    # run the suite
 ```
 
-Point `JOLT_UPSTREAM` at your fork checkout if it is not the default.
+For example, `JOLT_BIN=/path/to/jolt bin/jnc -M:test` uses that exact binary for
+the parent suite and every subprocess witness.
 
 ## Design
 

@@ -8,7 +8,8 @@
   A SKIP is not a pass and not a failure. Some behavior (IPv6 loopback) is
   genuinely unavailable in some containers, and silently counting that as a pass
   would be the worst outcome -- it would read as coverage we do not have."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [jolt.net.target :as target]))
 
 (def failures (atom 0))
 (def passes (atom 0))
@@ -76,18 +77,18 @@
   upstream clock implementation can change without forcing jolt-net to know its
   private name."
   []
-  (let [a (jolt.host/mono-nanos)
-        b (jolt.host/mono-nanos)]
-    (check-pred "jolt.host/mono-nanos returns an exact integer" integer? a)
-    (check-pred "jolt.host/mono-nanos is nondecreasing" #(>= % a) b)
+  (let [a (target/monotonic-nanos)
+        b (target/monotonic-nanos)]
+    (check-pred "jolt.net.target/monotonic-nanos returns an exact integer" integer? a)
+    (check-pred "jolt.net.target/monotonic-nanos is nondecreasing" #(>= % a) b)
     ;; This is the same discriminator used by Jolt's own telemetry gate.  It
     ;; rules out the former currentTimeMillis*1e6 implementation while avoiding
     ;; any assertion about Chez's private clock-source identity.
     (check-pred
-     "jolt.host/mono-nanos is not millisecond-truncated"
+     "jolt.net.target/monotonic-nanos is not millisecond-truncated"
      identity
      (some (fn [_]
-             (pos? (rem (jolt.host/mono-nanos) 1000000)))
+             (pos? (rem (target/monotonic-nanos) 1000000)))
            (range 200)))))
 
 (defn summary

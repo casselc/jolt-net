@@ -684,7 +684,7 @@ ARM64EC — an x64-compatible ABI — is rejected rather than accepted as close
 enough.
 
 Note honestly that witnesses 5 and 6, Chez's `(machine-type)` and
-`jolt.host/target`, are **not independent**: the core derives `:arch` from
+`jolt.net.target/current-target`, are **not independent**: the core derives `:arch` from
 `(machine-type)` through an exact allowlist. They are listed as two checks
 because they fail at two different layers, not because they are two facts.
 
@@ -729,7 +729,7 @@ msvc-arm64-env: VSCMD_ARG_TGT_ARCH=arm64 VSCMD_ARG_HOST_ARCH=arm64
             AA64 machine (ARM64)      <- tarm64nt\bin\tarm64nt\scheme.exe
 chez version: 10.4.1
 chez machine-type: tarm64nt
-jolt.host/target: {:os :windows, :arch :aarch64, :abi :unknown, :libc :unknown,
+jolt.net.target/current-target: {:os :windows, :arch :aarch64, :abi :unknown, :libc :unknown,
                    :endian :little, :pointer-bits 64, ...}
 OK:  windows-aarch64.edn matches this machine's real headers byte-for-byte
 ```

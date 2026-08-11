@@ -43,10 +43,10 @@
                        ": this target has no readiness runtime")
                   {:jolt.net/op op
                    :jolt.net/kind :unsupported-target
-                   :jolt.net/target (jolt.host/target)})))
+                   :jolt.net/target (jolt.net.target/current-target)})))
 
 (defn- require-poller-target! [op]
-  (when-not (contains? poller-targets (:os (jolt.host/target)))
+  (when-not (contains? poller-targets (:os (jolt.net.target/current-target)))
     (unsupported! op)))
 
 (defn- take-mutations! [poller]
@@ -548,7 +548,7 @@
   Stale-event rejection is NOT weakened: `current-token?` gates this backend
   exactly as it gates POSIX, which is the invariant W3 proves."
   []
-  (when-not (= :windows (:os (jolt.host/target)))
+  (when-not (= :windows (:os (jolt.net.target/current-target)))
     (unsupported! :open-readiness-adapter))
   ;; Winsock must be up before WSAPoll, as for every other Winsock entry point.
   (nffi/ensure-subsystem!)
@@ -734,7 +734,7 @@
   [poller]
   (if-let [clock (:jolt.net/monotonic-nanos poller)]
     (clock)
-    (jolt.host/mono-nanos)))
+    (jolt.net.target/monotonic-nanos)))
 
 (defn- native-wait!
   "Drive the native readiness wait against ONE caller-owned absolute monotonic

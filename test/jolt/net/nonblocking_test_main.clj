@@ -27,14 +27,14 @@
             [jolt.net.windows-handle-count :as whc]
             [jolt.net :as net]))
 
-(defn- windows? [] (= :windows (:os (jolt.host/target))))
+(defn- windows? [] (= :windows (:os (jolt.net.target/current-target))))
 
 (def ^:private wait-budget-ms 5000)
 (def ^:private suite-timeout-ms 60000)
 (def ^:private timeout-token ::timeout)
 
-(defn- deadline-ns [ms] (+ (jolt.host/mono-nanos) (* ms 1000000)))
-(defn- expired? [deadline] (< deadline (jolt.host/mono-nanos)))
+(defn- deadline-ns [ms] (+ (jolt.net.target/monotonic-nanos) (* ms 1000000)))
+(defn- expired? [deadline] (< deadline (jolt.net.target/monotonic-nanos)))
 
 ;; --- probed transition facts ------------------------------------------------
 (defn- transition-facts! []
@@ -435,13 +435,13 @@
 ;; --- entry point -------------------------------------------------------------
 (defn- run-suite! []
   (println "jolt-net non-blocking suite (dependency-free, no poller)")
-  (println (str "target: " (jolt.host/target)))
+  (println (str "target: " (jolt.net.target/current-target)))
   (println (str "transition postcondition: " (nb/postcondition-kind)))
 
   (c/section "scaffold")
-  (c/check-pred "jolt.host/target resolves an os"
+  (c/check-pred "jolt.net.target/current-target resolves an os"
                 #(contains? #{:linux :darwin :windows} %)
-                (:os (jolt.host/target)))
+                (:os (jolt.net.target/current-target)))
   (c/monotonic-clock-facts!)
 
   (transition-facts!)

@@ -5,12 +5,9 @@
 ;; the byte contract in a separate, optional namespace and must never be required
 ;; to open a plain TCP socket.
 ;;
-;; REQUIRES THE LOCAL JOLT FORK. Upstream Jolt v0.5.20 supplies the monotonic
-;; clock, but lacks the exact target, atomic native-error, 16-bit-type, scoped
-;; array-slice, and variadic-boundary primitives. Use bin/jnc, which points at
-;; the canonical v0.5.20 rebase worktree and fails with a readable message if it
-;; is missing.
-;; See docs/UPSTREAM-NOTES.md.
+;; Use bin/jnc to select an explicit JOLT_BIN (or the installed `jolt`) and keep
+;; this project root stable across subprocess gates. See docs/UPSTREAM-NOTES.md
+;; for the shared FFI capabilities required beyond upstream v0.7.1.
 ;;
 ;; libc is resolved from the running process (:process true) because the socket
 ;; and resolver symbols live in the already-loaded process image. The Windows
@@ -66,6 +63,5 @@
                               :main-opts
                               ["-m" "jolt.net.poller-wake-test-main"]}}
 
- ;; Deliberately not a bare `jolt -M:test`: an upstream v0.5.20 launcher on PATH
- ;; cannot load this library at all.
+ ;; The wrapper keeps parent and subprocess witnesses on the same native binary.
  :tasks {test "bin/jnc -M:test"}}

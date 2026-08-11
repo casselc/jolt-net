@@ -92,7 +92,7 @@
                 (try (net/connect (net/endpoint "127.0.0.1" 1))
                      (catch :default e (:jolt.net/code (ex-data e)))))
 
-  (when (contains? #{:linux :darwin} (:os (jolt.host/target)))
+  (when (contains? #{:linux :darwin} (:os (jolt.net.target/current-target)))
     (let [project-root (System/getenv "JOLT_PWD")
           result (shell/sh (str project-root "/bin/jnc") "-M:sigpipe"
                            :dir project-root)]
@@ -136,7 +136,7 @@
   ;; POSIX blocking accept is implemented through the close-wakeable readiness
   ;; path. It must not hold an uninterruptible lease or enter accept(2) on an fd
   ;; that close can recycle.
-  (when (contains? #{:linux :darwin} (:os (jolt.host/target)))
+  (when (contains? #{:linux :darwin} (:os (jolt.net.target/current-target)))
     (let [l (net/listen (net/endpoint "127.0.0.1" 0))
           before (atom 0)
           after (atom 0)

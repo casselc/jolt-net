@@ -46,7 +46,7 @@
 # produce entirely x86-64 evidence. Six architecture witnesses must
 # therefore agree before a socket is opened: the runner label, the selected MSVC
 # target, the compiled probe's PE machine type, scheme.exe's PE machine type,
-# Chez's own (machine-type), and jolt.host/target as jolt-net's selector sees
+# Chez's own (machine-type), and jolt.net.target/current-target as the selector sees
 # it. Installing a prebuilt toolchain does not weaken any of them: the shipped
 # scheme.exe is checked for an AA64 PE header and a tarm64nt machine type on the
 # runner itself, exactly as the source-built one was.
@@ -65,10 +65,10 @@ permissions:
   contents: read
 
 env:
-  # One reviewed v0.5.20 proposal-fork revision for every source-mode lane.
+  # One reviewed v0.7.1 proposal-fork revision for every source-mode lane.
   # Keep this centralized so a platform cannot silently validate against a
   # different core.
-  JOLT_CORE_SHA: 9fc64f93eba8b56a319f91bb1a322e2efced9c70
+  JOLT_CORE_SHA: 38e43b1149e64c29efbcefa99398ce91e0e0d675
   # One immutable toolchain release for all six targets. The per-target archive
   # digests live next to each target below so a wrong pairing cannot pass.
   CHEZ_RELEASE_TAG: chez-ci-10.4.1.1
@@ -402,7 +402,7 @@ jobs:
       - name: Install jolt-hegel (property-test engine)
         working-directory: jolt-net
         env:
-          JOLT_UPSTREAM: ${{ github.workspace }}/jolt-upstream
+          JOLT_BIN: ${{ github.workspace }}/jolt-upstream/bin/jolt
           JOLT_CHEZ: ${{ steps.chez.outputs.executable }}
         run: ./bin/jnc -A:test -m hegel.install
 
@@ -446,7 +446,7 @@ jobs:
       - name: Run the suite
         working-directory: jolt-net
         env:
-          JOLT_UPSTREAM: ${{ github.workspace }}/jolt-upstream
+          JOLT_BIN: ${{ github.workspace }}/jolt-upstream/bin/jolt
           JOLT_CHEZ: ${{ steps.chez.outputs.executable }}
           JOLT_HEGEL_REQUIRED: "1"
         run: ./bin/jnc -M:test
@@ -640,8 +640,8 @@ jobs:
   # runner" is not evidence that ARM64 code did the work. The job therefore
   # requires six architecture checks to agree -- the runner label, selected
   # MSVC target, compiled probe's PE machine type, scheme.exe's PE machine type,
-  # Chez's own (machine-type), and jolt.host/target as seen by jolt-net's
-  # selector -- before any socket is opened. The final two are checks at
+  # Chez's own (machine-type), and jolt.net.target/current-target as seen by
+  # jolt-net's selector -- before any socket is opened. The final two are checks at
   # different layers but are not independent: target derives arch from Chez's
   # machine type.
   #

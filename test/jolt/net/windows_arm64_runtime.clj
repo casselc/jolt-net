@@ -10,20 +10,20 @@
 ;; itself evidence that an ARM64 process did the work.
 ;;
 ;; Four of the six required agreements are checked here:
-;;   - the Jolt runtime architecture, via (jolt.host/target);
+;;   - the Jolt runtime architecture, via (jolt.net.target/current-target);
 ;;   - the jolt-net target selector, via jolt.net.target/supported-target?;
 ;;   - the committed descriptor's own architecture and evidence label;
 ;;   - the committed probe file the descriptor was reviewed from.
 ;; The other two are properties of binaries rather than of this process, so the
 ;; workflow checks them there: the Chez machine type is read straight from
 ;; scheme.exe with `(machine-type)` and its PE header, and the compiled ABI
-;; probe's PE machine type with dumpbin. Note that (jolt.host/target) derives
+;; probe's PE machine type with dumpbin. Note that (jolt.net.target/current-target) derives
 ;; :arch FROM (machine-type), so those are NOT two independent witnesses; the
 ;; independent one is the PE header, which reports what the file actually is
 ;; rather than what the process says about itself.
 (require '[jolt.net.target :as target])
 
-(let [observed (jolt.host/target)
+(let [observed (jolt.net.target/current-target)
       tuple [(:os observed) (:arch observed) (:pointer-bits observed)]
       probe (read-string
               (slurp
@@ -32,7 +32,7 @@
       descriptor (target/descriptor observed)
       x86-64 (target/descriptor {:os :windows :arch :x86-64 :pointer-bits 64})]
 
-  (println "jolt.host/target: " (pr-str observed))
+  (println "jolt.net.target/current-target: " (pr-str observed))
 
   ;; 1. Source Jolt reports native Windows ARM64. The core derives this from
   ;; Chez's (machine-type) through an exact allowlist, so an emulated ta6nt
@@ -115,6 +115,6 @@
       (ex-info "tarm64nt no longer reports :abi :unknown; re-review whether jolt-net may read :abi"
                {:abi (:abi observed) :target observed})))
 
-  (println "PASS native Windows ARM64: jolt.host/target" (pr-str tuple)
+  (println "PASS native Windows ARM64: jolt.net.target/current-target" (pr-str tuple)
            "descriptor :probed and equal to windows/x86-64")
   (flush))

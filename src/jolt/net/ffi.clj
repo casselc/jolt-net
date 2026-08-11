@@ -64,8 +64,8 @@
 ;; typed :int for this bounded F_GETFL/F_SETFL surface, but the ABI must still
 ;; name the two-fixed-argument boundary: Apple arm64 places `...` arguments on
 ;; the stack even when a fixed third argument would have occupied a register.
-(ffi/defcfn p-fcntl-with-error "fcntl" [:int :int :int] :int
-  {:varargs-after 2 :capture-native-error true})
+(ffi/defcfn p-fcntl-with-error "fcntl" [:int :int :varargs :int] :int
+  {:capture-native-error true})
 (ffi/defcfn p-pipe-with-error "pipe" [:pointer] :int
   {:capture-native-error true})
 (ffi/defcfn p-poll-size-with-error "poll" [:pointer :size_t :int] :int

@@ -6,10 +6,11 @@
   rollback leaked nothing. GetProcessHandleCount measures the process resource
   directly. Callers still owe a live non-vacuity check showing that the
   measurement observes sockets on the current runtime."
-  (:require [jolt.ffi :as ffi]))
+  (:require [jolt.ffi :as ffi]
+            [jolt.net.target :as target]))
 
 (def ^:private windows?
-  (= :windows (:os (jolt.host/target))))
+  (= :windows (:os (target/current-target))))
 
 ;; Keep POSIX test namespace loading dependency-free. The bindings are lazy, but
 ;; loading kernel32 itself must also remain Windows-only.
@@ -31,7 +32,7 @@
     (throw (ex-info "GetProcessHandleCount is available only on Windows"
                     {:jolt.net/kind :unsupported-target
                      :jolt.net/op :process-handle-count
-                     :target (jolt.host/target)})))
+                     :target (jolt.net.target/current-target)})))
   (let [out (ffi/alloc (ffi/sizeof :uint))]
     (try
       (ffi/write out :uint 0 0)

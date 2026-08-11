@@ -164,7 +164,7 @@
       (finally (net/close! p)))))
 
 (defn run! []
-  (if (contains? #{:linux :darwin :windows} (:os (jolt.host/target)))
+  (if (contains? #{:linux :darwin :windows} (:os (jolt.net.target/current-target)))
     (run-checks!)
     (do
       (c/section "wake cursor: publication/drain/arm ordering")

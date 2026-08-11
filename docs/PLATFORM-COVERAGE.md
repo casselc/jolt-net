@@ -180,7 +180,7 @@ deprecation warning from any action.
   | 3 | compiled ABI probe's PE machine type | `tools/assert-arm64-image.bat` |
   | 4 | `scheme.exe`'s PE machine type | `tools/assert-arm64-image.bat` |
   | 5 | Chez's own `(machine-type)` — must be `tarm64nt` | workflow step |
-  | 6 | `jolt.host/target` as jolt-net's selector sees it | `test/jolt/net/windows_arm64_runtime.clj` |
+  | 6 | `jolt.net.target/current-target` as jolt-net's selector sees it | `test/jolt/net/windows_arm64_runtime.clj` |
 
   Witnesses 5 and 6 are **not independent of each other** — the core derives
   `:arch` from `(machine-type)` through an exact allowlist — and the doc says so
@@ -286,7 +286,7 @@ deprecation warning from any action.
 - **macOS runtime evidence.** The earlier gate showed that a typed
   three-argument signature is not enough for variadic `fcntl` on Apple arm64:
   the third argument uses the variadic stack ABI. The core binding now declares
-  `{:varargs-after 2}`, and jolt-net reads `F_GETFL` back before marking a
+  the upstream `:varargs` signature boundary, and jolt-net reads `F_GETFL` back before marking a
   handle. The complete poller, connect, close-race, SIGPIPE, and sliced-I/O
   suite passed on the macOS arm64 runner for commit `65a0f1e` in
   [CI run 30078697403](https://github.com/casselc/jolt-net/actions/runs/30078697403).

@@ -22,7 +22,7 @@
             [jolt.net.address-test :as address-test]
             [jolt.net.resolver-test :as resolver-test]))
 
-(defn- windows? [] (= :windows (:os (jolt.host/target))))
+(defn- windows? [] (= :windows (:os (jolt.net.target/current-target))))
 
 (def ^:private wait-timeout-ms 5000)
 (def ^:private suite-timeout-ms 60000)
@@ -252,16 +252,16 @@
 
 (defn- run-suite! []
   (println "jolt-net blocking-only suite (dependency-free)")
-  (println (str "target: " (jolt.host/target)))
-  (println "monotonic-clock: jolt.host/mono-nanos")
+  (println (str "target: " (jolt.net.target/current-target)))
+  (println "monotonic-clock: jolt.net.target/monotonic-nanos")
 
   (c/section "scaffold")
-  (c/check-pred "jolt.host/target resolves an os"
+  (c/check-pred "jolt.net.target/current-target resolves an os"
                 #(contains? #{:linux :darwin :windows} %)
-                (:os (jolt.host/target)))
-  (c/check-pred "jolt.host/target reports pointer width"
+                (:os (jolt.net.target/current-target)))
+  (c/check-pred "jolt.net.target/current-target reports pointer width"
                 #(or (= 32 %) (= 64 %))
-                (:pointer-bits (jolt.host/target)))
+                (:pointer-bits (jolt.net.target/current-target)))
   (c/monotonic-clock-facts!)
 
   ;; Must run before target/address/resolver/socket tests: those namespaces

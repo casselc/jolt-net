@@ -109,8 +109,23 @@
 (defn run! []
   (c/section "target: selection and fail-closed behavior")
 
-  (c/check-pred "this host is a supported target" true? (t/supported-target? (jolt.host/target)))
+  (c/check-pred "this host is a supported target" true? (t/supported-target? (jolt.net.target/current-target)))
   (c/check-pred "descriptor resolves for this host" map? (t/descriptor))
+  (c/check "threaded Linux x86-64 selects exact facts"
+           {:os :linux :arch :x86-64 :pointer-bits 64}
+           (t/target-for-machine-type "ta6le"))
+  (c/check "threaded Windows ARM64 selects exact facts"
+           {:os :windows :arch :aarch64 :pointer-bits 64}
+           (t/target-for-machine-type "tarm64nt"))
+  (c/check "threaded Darwin ARM64 selects exact facts"
+           {:os :darwin :arch :aarch64 :pointer-bits 64}
+           (t/target-for-machine-type "tarm64osx"))
+  (c/check-throws "an unknown machine tag fails rather than matching a suffix"
+                  {:jolt.net/kind :unsupported-target}
+                  #(t/target-for-machine-type "future-ta6le"))
+  (c/check-throws "case drift in a machine tag fails closed"
+                  {:jolt.net/kind :unsupported-target}
+                  #(t/target-for-machine-type "TA6LE"))
 
   ;; Fail closed. Each of these would be a wrong struct offset if guessed.
   (c/check-throws "an unknown os throws rather than guessing"

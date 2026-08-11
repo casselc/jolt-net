@@ -300,7 +300,7 @@ interleaving tests supply the semantic oracle:
   separate precheck admitted, the corrected conflict, and useful close with no
   active await. The native W3 test parks one await at the call seam and requires
   refusal to leave the adapter open before releasing and closing it normally.
-- `jolt.net.ffi/p-fcntl` declares `{:varargs-after 2}`, and
+- `jolt.net.ffi/p-fcntl-with-error` declares the upstream `:varargs` boundary, and
   `jolt.net.nonblocking/set-raw!` reads `F_GETFL` back before any handle is
   marked. `test/jolt/net/poller_test.clj` independently observes the bit on a
   returned listener and injects the buggy control where `F_SETFL` appears to

@@ -253,8 +253,47 @@
    ;; run green and their probe artifact has been reviewed into the baseline.
    [:darwin :x86-64 64] (assoc darwin :evidence :inferred-from-darwin-aarch64)})
 
+;; Upstream Jolt v0.7.1 exposes Chez's exact machine tag. Classify complete
+;; tags here beside the ABI tables; fuzzy suffix matching could silently select
+;; a false layout for a future target. Threaded and non-threaded tags share the
+;; same socket ABI.
+(def ^:private machine-targets
+  {"a6le"      {:os :linux :arch :x86-64 :pointer-bits 64}
+   "ta6le"     {:os :linux :arch :x86-64 :pointer-bits 64}
+   "arm64le"   {:os :linux :arch :aarch64 :pointer-bits 64}
+   "tarm64le"  {:os :linux :arch :aarch64 :pointer-bits 64}
+   "a6nt"      {:os :windows :arch :x86-64 :pointer-bits 64}
+   "ta6nt"     {:os :windows :arch :x86-64 :pointer-bits 64}
+   "arm64nt"   {:os :windows :arch :aarch64 :pointer-bits 64}
+   "tarm64nt"  {:os :windows :arch :aarch64 :pointer-bits 64}
+   "a6osx"     {:os :darwin :arch :x86-64 :pointer-bits 64}
+   "ta6osx"    {:os :darwin :arch :x86-64 :pointer-bits 64}
+   "arm64osx"  {:os :darwin :arch :aarch64 :pointer-bits 64}
+   "tarm64osx" {:os :darwin :arch :aarch64 :pointer-bits 64}})
+
+(defn target-for-machine-type
+  "Exact jolt-net target facts for one Chez machine tag."
+  [machine]
+  (or (get machine-targets machine)
+      (throw (ex-info (str "jolt.net: unsupported Chez machine type " machine)
+                      {:jolt.net/kind :unsupported-target
+                       :jolt.net/machine-type machine
+                       :jolt.net/supported-machine-types
+                       (vec (sort (keys machine-targets)))}))))
+
+(defn current-target
+  "The current runtime's exact socket ABI target coordinate."
+  []
+  (let [machine (jolt.host/machine-type)]
+    (assoc (target-for-machine-type machine) :machine-type machine)))
+
+(defn monotonic-nanos
+  "The upstream v0.7.1 monotonic clock behind jolt-net deadlines."
+  []
+  (System/nanoTime))
+
 (defn supported-target?
-  "Is `t` (a jolt.host/target-shaped map) a target jolt-net has facts for?"
+  "Is `t` an [os arch pointer-bits] map jolt-net has facts for?"
   [t]
   (contains? descriptors [(:os t) (:arch t) (:pointer-bits t)]))
 
@@ -269,7 +308,7 @@
   Throws :unsupported-target rather than guessing. The message names the observed
   target and lists what is supported, because the actionable fix is either to add
   a probed descriptor or to run on a supported host."
-  ([] (descriptor (jolt.host/target)))
+  ([] (descriptor (current-target)))
   ([t]
    (or (get descriptors [(:os t) (:arch t) (:pointer-bits t)])
        (throw (ex-info (str "jolt.net: unsupported target "

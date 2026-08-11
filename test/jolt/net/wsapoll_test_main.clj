@@ -30,7 +30,7 @@
             [jolt.net :as net]))
 
 (def ^:private d nffi/descriptor)
-(defn- windows? [] (= :windows (:os (jolt.host/target))))
+(defn- windows? [] (= :windows (:os (jolt.net.target/current-target))))
 
 (def ^:private suite-timeout-ms 120000)
 (def ^:private timeout-token ::timeout)
@@ -40,8 +40,8 @@
 (def ^:private connect-budget-ms 20000)
 (def ^:private io-budget-ms 5000)
 
-(defn- deadline-ns [ms] (+ (jolt.host/mono-nanos) (* ms 1000000)))
-(defn- expired? [deadline] (< deadline (jolt.host/mono-nanos)))
+(defn- deadline-ns [ms] (+ (jolt.net.target/monotonic-nanos) (* ms 1000000)))
+(defn- expired? [deadline] (< deadline (jolt.net.target/monotonic-nanos)))
 
 ;; --- low-level single-handle readiness --------------------------------------
 ;; Deliberately bypasses the registration machinery: these cases are about the
@@ -65,7 +65,7 @@
   [raw interests budget-ms pred]
   (let [deadline (deadline-ns budget-ms)]
     (loop []
-      (let [remaining (- deadline (jolt.host/mono-nanos))]
+      (let [remaining (- deadline (jolt.net.target/monotonic-nanos))]
         (if (neg? remaining)
           timeout-token
           (let [slice (min 1000 (quot (+ remaining 999999) 1000000))
@@ -675,7 +675,7 @@
 
 (defn- run-suite! []
   (println "jolt-net WSAPoll readiness suite (dependency-free, task W3)")
-  (println (str "target: " (jolt.host/target)))
+  (println (str "target: " (jolt.net.target/current-target)))
   (println (str "readiness backend: " (:kind r/backend)))
   (println (str "wake transport: " (pr-str (r/wake-transport))))
 

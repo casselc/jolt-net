@@ -47,7 +47,7 @@
             [jolt.net :as net]))
 
 (def ^:private d nffi/descriptor)
-(defn- windows? [] (= :windows (:os (jolt.host/target))))
+(defn- windows? [] (= :windows (:os (jolt.net.target/current-target))))
 
 (def ^:private suite-timeout-ms 180000)
 (def ^:private timeout-token ::timeout)
@@ -61,8 +61,8 @@
 ;; false negative here only weakens the test, never fakes a pass.
 (def ^:private blocked-probe-ms 250)
 
-(defn- deadline-ns [ms] (+ (jolt.host/mono-nanos) (* ms 1000000)))
-(defn- expired? [deadline] (< deadline (jolt.host/mono-nanos)))
+(defn- deadline-ns [ms] (+ (jolt.net.target/monotonic-nanos) (* ms 1000000)))
+(defn- expired? [deadline] (< deadline (jolt.net.target/monotonic-nanos)))
 
 (defn- spin-until!
   "Busy-wait on an atomic predicate until it holds, or the budget expires.
@@ -682,7 +682,7 @@
 
 (defn- run-suite! []
   (println "jolt-net public poller wake suite (dependency-free, task W4)")
-  (println (str "target: " (jolt.host/target)))
+  (println (str "target: " (jolt.net.target/current-target)))
   (println (str "readiness backend: " (:kind r/backend)))
   (println (str "wake transport: " (pr-str (r/wake-transport))))
   (println (str "terminal wake: " (pr-str wake/terminal-wake)))

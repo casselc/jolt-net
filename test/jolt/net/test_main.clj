@@ -16,19 +16,19 @@
 
 (defn -main [& _]
   (println "jolt-net test suite")
-  (println (str "target: " (jolt.host/target)))
-  (println "monotonic-clock: jolt.host/mono-nanos")
+  (println (str "target: " (jolt.net.target/current-target)))
+  (println "monotonic-clock: jolt.net.target/monotonic-nanos")
 
   (c/section "scaffold")
   ;; The scaffold's own gate: prove we are running on the required core. Every
   ;; later namespace depends on these contracts, so failing here first gives a
   ;; readable diagnosis instead of an unbound-var deep in a socket call.
-  (c/check-pred "jolt.host/target resolves an os"
+  (c/check-pred "jolt.net.target/current-target resolves an os"
                 #(contains? #{:linux :darwin :windows} %)
-                (:os (jolt.host/target)))
-  (c/check-pred "jolt.host/target reports pointer width"
+                (:os (jolt.net.target/current-target)))
+  (c/check-pred "jolt.net.target/current-target reports pointer width"
                 #(or (= 32 %) (= 64 %))
-                (:pointer-bits (jolt.host/target)))
+                (:pointer-bits (jolt.net.target/current-target)))
   (c/monotonic-clock-facts!)
   (c/check-pred "fork prerequisite: 16-bit foreign types exist"
                 #(= 2 %) (jolt.ffi/sizeof :uint16))

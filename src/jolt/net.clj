@@ -119,10 +119,10 @@
 (def ^:private poller-targets #{:linux :darwin :windows})
 
 (defn- nonblocking-runtime? []
-  (contains? nonblocking-targets (:os (jolt.host/target))))
+  (contains? nonblocking-targets (:os (jolt.net.target/current-target))))
 
 (defn- poller-runtime? []
-  (contains? poller-targets (:os (jolt.host/target))))
+  (contains? poller-targets (:os (jolt.net.target/current-target))))
 
 (defn- require-nonblocking-runtime! [op]
   (when-not (nonblocking-runtime?)
@@ -130,7 +130,7 @@
                          ": this target has no non-blocking transition")
                     {:jolt.net/op op
                      :jolt.net/kind :unsupported-target
-                     :jolt.net/target (jolt.host/target)}))))
+                     :jolt.net/target (jolt.net.target/current-target)}))))
 
 (defn- with-nonblocking-lease [sock f]
   (require-nonblocking-runtime! :set-nonblocking)
