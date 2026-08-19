@@ -4,11 +4,11 @@ jolt-net is written to move into the jolt stdlib as `jolt.net`. This file record
 what that move depends on, and where jolt-net deliberately departs from the
 accepted design spike.
 
-## Jolt v0.7.1 capability boundary
+## Jolt v0.7.16 capability boundary
 
-Jolt v0.7.1 supplies exact Chez machine tags, a real monotonic clock, and the
-current variadic-signature marker. Three shared FFI capabilities remain on the
-fork branch:
+Jolt v0.7.16 supplies exact Chez machine tags, a real monotonic clock, the
+current variadic-signature marker, and the public `jolt.ffi/errno` accessor.
+Three shared FFI capabilities remain on the fork branch:
 
 | Primitive | Commit | Why jolt-net needs it |
 |---|---|---|

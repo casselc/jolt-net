@@ -82,7 +82,7 @@ Ownership transfers with both `net/connected` and `net/in-progress`; neither
 
 ## Requirements
 
-This branch targets Jolt v0.7.1 plus three reviewed shared FFI capabilities. It
+This branch targets Jolt v0.7.16 plus three reviewed shared FFI capabilities. It
 does not preserve compatibility with older Jolt releases:
 
 - exact fail-closed socket ABI facts selected from upstream

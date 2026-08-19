@@ -7,7 +7,7 @@
 ;;
 ;; Use bin/jnc to select an explicit JOLT_BIN (or the installed `jolt`) and keep
 ;; this project root stable across subprocess gates. See docs/UPSTREAM-NOTES.md
-;; for the shared FFI capabilities required beyond upstream v0.7.1.
+;; for the shared FFI capabilities carried by the reviewed v0.7.16 fork.
 ;;
 ;; libc is resolved from the running process (:process true) because the socket
 ;; and resolver symbols live in the already-loaded process image. The Windows
@@ -28,7 +28,7 @@
  :aliases {:test {:extra-paths ["test"]
                   :extra-deps {io.github.chucklehead-dev/jolt-hegel
                                {:git/url "https://github.com/chucklehead-dev/jolt-hegel.git"
-                                :git/sha "ffe523023437862c7e474dc216346426318754c6"}}
+                                :git/sha "54f2e2cf84d5b080c37ee546417b50c2e39e7ccd"}}
                   :main-opts ["-m" "jolt.net.test-main"]}
            :sigpipe {:extra-paths ["test"]
                      :main-opts ["-m" "jolt.net.sigpipe-child"]}

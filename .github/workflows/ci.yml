@@ -65,10 +65,10 @@ permissions:
   contents: read
 
 env:
-  # One reviewed v0.7.1 proposal-fork revision for every source-mode lane.
+  # One reviewed v0.7.16 proposal-fork revision for every source-mode lane.
   # Keep this centralized so a platform cannot silently validate against a
   # different core.
-  JOLT_CORE_SHA: 38e43b1149e64c29efbcefa99398ce91e0e0d675
+  JOLT_CORE_SHA: 98d53b462c128cec34dd6eb387760cb50f1aae49
   # One immutable toolchain release for all six targets. The per-target archive
   # digests live next to each target below so a wrong pairing cannot pass.
   CHEZ_RELEASE_TAG: chez-ci-10.4.1.1
@@ -791,7 +791,7 @@ jobs:
           $workspace = Resolve-Path $env:GITHUB_WORKSPACE
           $runtimePath = Resolve-Path $runtime
           if ($workspace.Drive.Name -ne $runtimePath.Drive.Name) {
-            throw "Jolt v0.7.1 requires workspace and runtime on the same volume"
+            throw "Jolt v0.7.16 requires workspace and runtime on the same volume"
           }
           $workspaceTail = $workspace.Path.Substring($workspace.Drive.Root.Length).Replace("\", "/")
           $env:JOLT_PWD = "/$workspaceTail"
