@@ -106,10 +106,10 @@
 (def ^:private poller-targets #{:linux :darwin})
 
 (defn- posix-nonblocking-runtime? []
-  (contains? posix-nonblocking-targets (:os (jolt.host/target))))
+  (contains? posix-nonblocking-targets (:os (t/current-target))))
 
 (defn- poller-runtime? []
-  (contains? poller-targets (:os (jolt.host/target))))
+  (contains? poller-targets (:os (t/current-target))))
 
 (defn- require-posix-nonblocking-runtime! [op]
   (when-not (posix-nonblocking-runtime?)
@@ -117,7 +117,7 @@
                          ": the non-blocking runtime is POSIX-only in this slice")
                     {:jolt.net/op op
                      :jolt.net/kind :unsupported-target
-                     :jolt.net/target (jolt.host/target)}))))
+                     :jolt.net/target (t/current-target)}))))
 
 (defn- with-nonblocking-lease [sock f]
   (require-posix-nonblocking-runtime! :set-nonblocking)
@@ -551,17 +551,15 @@
     (with-nonblocking-lease
       sock
       (fn [raw _]
-        (ffi/with-byte-array-pointer
-          dest off len
-          (fn [ptr nbytes]
-            (let [n (nffi/invoke :try-recv raw ptr nbytes 0)]
-              (cond
-                (pos? n) n
-                (zero? n) eof
-                :else (let [code (err/capture)]
-                        (if (would-block-code? code)
-                          would-block
-                          (throw (err/native-ex :read code nil))))))))))))
+        (ffi/with-alloc [ptr len]
+          (let [n (nffi/invoke :try-recv raw ptr len 0)]
+            (cond
+              (pos? n) (do (ffi/read-into! ptr dest off n) n)
+              (zero? n) eof
+              :else (let [code (err/capture)]
+                      (if (would-block-code? code)
+                        would-block
+                        (throw (err/native-ex :read code nil)))))))))))
 
 (defn try-write-bytes!
   "Write from src[off,off+len) without waiting.
@@ -577,23 +575,22 @@
     (with-nonblocking-lease
       sock
       (fn [raw _]
-        (ffi/with-byte-array-pointer
-          src off len
-          (fn [ptr nbytes]
-            (let [n (nffi/invoke :try-send
-                                 raw ptr nbytes
-                                 (or (t/const d :msg-nosignal) 0))]
-              (cond
-                (pos? n) n
-                (zero? n)
-                (throw (err/invalid-ex
-                         :write
-                         "send made no progress for a non-empty slice"
-                         {:jolt.net/length len}))
-                :else (let [code (err/capture)]
-                        (if (would-block-code? code)
-                          would-block
-                          (throw (err/native-ex :write code nil))))))))))))
+        (ffi/with-alloc [ptr len]
+          (ffi/write-array ptr src off len)
+          (let [n (nffi/invoke :try-send
+                               raw ptr len
+                               (or (t/const d :msg-nosignal) 0))]
+            (cond
+              (pos? n) n
+              (zero? n)
+              (throw (err/invalid-ex
+                       :write
+                       "send made no progress for a non-empty slice"
+                       {:jolt.net/length len}))
+              :else (let [code (err/capture)]
+                      (if (would-block-code? code)
+                        would-block
+                        (throw (err/native-ex :write code nil)))))))))))
 
 (defn close!
   "Close a socket or poller. Idempotent: returns true if this call closed it."

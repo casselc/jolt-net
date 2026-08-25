@@ -5,7 +5,8 @@
             [jolt.net.ffi :as nffi]
             [jolt.net.handle :as h]
             [jolt.net.nonblocking :as nb]
-            [jolt.net.poller :as poller]))
+            [jolt.net.poller :as poller]
+            [jolt.net.target :as target]))
 
 (defn- connected-pair []
   (let [listener (net/listen (net/endpoint "127.0.0.1" 0)
@@ -37,7 +38,7 @@
       :else (do (Thread/sleep 2) (recur (dec remaining))))))
 
 (defn- remaining-ms [deadline]
-  (let [remaining (- deadline (jolt.host/monotonic-nanos))]
+  (let [remaining (- deadline (System/nanoTime))]
     (if (pos? remaining)
       ;; ceil(ns / 1e6): truncating here could turn a still-live sub-millisecond
       ;; deadline into an accidental zero-timeout busy loop.
@@ -54,7 +55,7 @@
     (try
       (net/register! p socket #{:write})
       (loop []
-        (if (<= deadline (jolt.host/monotonic-nanos))
+        (if (<= deadline (System/nanoTime))
           ::deadline
           (let [ready (net/await-ready p (remaining-ms deadline))]
             (if (empty? ready)
@@ -171,7 +172,7 @@
         attempt (net/try-connect (net/endpoint "127.0.0.1" port)
                                  {:no-delay? true})
         socket (:jolt.net/socket attempt)
-        deadline (+ (jolt.host/monotonic-nanos) 2000000000)]
+        deadline (+ (System/nanoTime) 2000000000)]
     (try
       (c/check-throws "completion rejects a socket with no connect provenance"
                       {:jolt.net/kind :invalid
@@ -192,7 +193,7 @@
         (c/check "write readiness plus SO_ERROR completes the connection"
                  net/connected status)
         (c/check-pred "completion respected the caller's absolute deadline"
-                      #(< % deadline) (jolt.host/monotonic-nanos)))
+                      #(< % deadline) (System/nanoTime)))
       (let [server (net/accept listener)]
         (try
           (c/check "completed socket reports the actual peer"
@@ -220,7 +221,7 @@
                  [(:jolt.net/op data) (:jolt.net/kind data)]))
       (let [attempt (:attempt result)
             socket (:jolt.net/socket attempt)
-            deadline (+ (jolt.host/monotonic-nanos) 2000000000)
+            deadline (+ (System/nanoTime) 2000000000)
             data (try
                    (complete-connect-by! attempt deadline)
                    (catch :default e (ex-data e)))]
@@ -369,9 +370,9 @@
              [(:phase @(:lifecycle poller))
               (h/closed? (:wake-write poller))
               (h/closed? (:wake-read poller))])
-    (let [start (jolt.host/monotonic-nanos)
+    (let [start (System/nanoTime)
           result (net/close! poller)
-          elapsed (- (jolt.host/monotonic-nanos) start)]
+          elapsed (- (System/nanoTime) start)]
       (c/check "poller close is idempotent"
                false result)
       (c/check-pred "repeated close is nonblocking"
@@ -510,7 +511,7 @@
         (net/close! p)))))
 
 (defn run! []
-  (if (contains? #{:linux :darwin} (:os (jolt.host/target)))
+  (if (contains? #{:linux :darwin} (:os (target/current-target)))
     (run-posix!)
     (do
       (c/section "non-blocking I/O and poller platform gate")

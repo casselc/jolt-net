@@ -4,23 +4,24 @@ jolt-net is written to move into the jolt stdlib as `jolt.net`. This file record
 what that move depends on, and where jolt-net deliberately departs from the
 accepted design spike.
 
-## Fork prerequisites
+## Current upstream boundary (revalidated 2026-08-25)
 
-jolt-net cannot load on released `joltc` v0.4.15. It requires six primitives added
-on the fork branch `codex/upstream-improvements-6-8`:
+Jolt v0.7.27 releases four of the original six prerequisites. The other two are
+no longer runtime requirements: jolt-net derives only the three target facts it
+consumes from released APIs, and uses scoped scratch buffers for native I/O.
+The checkout now runs on stock Jolt.
 
-| Primitive | Commit | Why jolt-net needs it |
+| Primitive | Official status | Why jolt-net needs it |
 |---|---|---|
-| `jolt.host/target` | `3105198a` | Select exact fail-closed ABI facts instead of inferring them from the build host. |
-| `jolt.host/monotonic-nanos`, `System/nanoTime` over a real monotonic clock | `1670dfde` | Deadlines. The previous `nanoTime` was `currentTimeMillis * 1e6` — wall-clock and millisecond-truncated, so it could step backwards and could not resolve a sub-millisecond interval at all. |
-| `:int16` / `:uint16` / `:short` / `:ushort` foreign types | `55160f2c` | `sockaddr_in.sin_family` and the `sockaddr_in6` fields are 16-bit. Without them the only option was the endian-dependent short-packing hack in `teensyp.ffi-net`. |
-| `jolt.ffi/errno` | `5422ee9d` | The whole error contract rests on reading the native error before any other native call. |
-| `jolt.ffi/with-byte-array-pointer` | `1c8fdb97` | Pins a validated interior array slice for one callback, eliminating partial-I/O allocation and copying without exposing an unsafe retained pointer. |
-| `{:varargs-after n}` on `jolt.ffi/defcfn` | `ecf7728f` | Lowers an explicit fixed/variadic boundary to Chez. Apple arm64 passes `fcntl`'s third argument according to the variadic ABI even though its Jolt type is known. |
+| `jolt.host/target` | Not released; dependency removed | `jolt.net.target/current-target` normalizes `os.name`, `os.arch`, and `ffi/sizeof :pointer`, then the existing tuple table still fails closed. |
+| `System/nanoTime` over a real monotonic clock | Released in 0.5.16 | Deadlines must not follow a stepping wall clock. |
+| `:int16` / `:uint16` / `:short` / `:ushort` | Released in 0.7.21 | Describe socket structures without endian-dependent half-word packing. |
+| `jolt.ffi/errno` | Released in 0.7.12 | Read the calling thread's native error immediately after failure. |
+| `jolt.ffi/with-byte-array-pointer` | Not released; dependency removed | Reads use scoped scratch plus `read-into!`; writes use scoped scratch plus sliced `write-array`. A future loan API could remove these copies without changing the public socket contract. |
+| `:varargs` in the `defcfn` argument vector | Released in 0.6.8 | Mark the fixed/variadic ABI boundary; this replaces the proposal's older `{:varargs-after n}` spelling. |
 
-These live in the proposed fork rather than inside jolt-net because each is a
-shared FFI/host platform concern. Nothing in this branch has been pushed to the
-core project's origin.
+The historical proposal commits remain useful design evidence, but no proposal
+fork is selected by the build or test workflow.
 
 ## Hard runtime prerequisite: lazy `defcfn`
 
@@ -50,6 +51,7 @@ code is always preserved regardless, so no diagnostic information is lost.
 ## When this moves upstream
 
 1. `src/jolt/net*.clj` → `stdlib/jolt/`, unchanged.
-2. `bin/jnc` and the fork-prerequisite checks in the test main become unnecessary.
+2. The local target helper can move with the tables unless Jolt gains an
+   equivalent stable target API.
 3. The `tools/probe-constants.sh` harness should move with the tables it verifies —
    it is what keeps them honest.
