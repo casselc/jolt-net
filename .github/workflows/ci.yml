@@ -9,9 +9,9 @@
 #           remembered numbers into checked ones, and it is the only way the
 #           macOS column becomes real.
 #
-#   test  — the full suite. Needs the forked joltc host/FFI primitives, which
-#           means checking out an exact casselc/jolt revision and building a
-#           matching Chez Scheme.
+#   test  — the full suite on the minimum released Jolt version claimed by the
+#           library. The release binary is self-contained, so this lane also
+#           verifies that no source-checkout or proposal-fork coupling remains.
 #
 # Windows is deliberately probe-only for now. The current Jolt runtime path and
 # real Winsock calls have not been characterized together, so source-building
@@ -128,6 +128,9 @@ jobs:
     name: suite (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    env:
+      JOLT_CACHE_DIR: ${{ github.workspace }}/.jolt-cache-v0.7.27
+      HEGEL_CACHE_DIR: ${{ github.workspace }}/.hegel-native
     strategy:
       fail-fast: false
       matrix:
@@ -139,87 +142,22 @@ jobs:
         with:
           path: jolt-net
 
-      # The fork carries the six primitives jolt-net is built on. Submodules
-      # are required: the runtime will not load without vendor/irregex et al.
-      - name: Checkout the jolt fork
-        uses: actions/checkout@v4
-        with:
-          repository: casselc/jolt
-          ref: ecf7728f15d8b8f858327c47dbd8b751eb36798c
-          submodules: recursive
-          path: jolt-upstream
-
-      # Build the same official Chez release used by Jolt's core workflow. The
-      # distro package is deliberately not used: it lacks the development
-      # kernel files needed by Jolt build paths and makes the runtime substrate
-      # drift from the source-build gate.
-      - name: Install source-build dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential git liblz4-dev zlib1g-dev \
-            libncurses-dev uuid-dev libssl-dev
-
-      - name: Install source-build dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install lz4 openssl@3
-
-      - name: Cache Chez Scheme (Linux)
-        if: runner.os == 'Linux'
-        id: cache-chez-linux
-        uses: actions/cache@v4
-        with:
-          path: ~/chez
-          key: chez-${{ runner.os }}-${{ runner.arch }}-v10.4.1-x11off-v1
-
-      - name: Build official Chez Scheme v10.4.1 from source (Linux)
-        if: runner.os == 'Linux' && steps.cache-chez-linux.outputs.cache-hit != 'true'
+      - name: Install released Jolt v0.7.27
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch v10.4.1 \
-            https://github.com/cisco/ChezScheme.git "$RUNNER_TEMP/chez-src"
-          cd "$RUNNER_TEMP/chez-src"
-          ./configure --installprefix="$HOME/chez" --threads --disable-x11
-          make -j"$(nproc)"
-          make install
+          install_dir="$RUNNER_TEMP/jolt-bin"
+          curl -fsSL \
+            https://raw.githubusercontent.com/jolt-lang/jolt/v0.7.27/install \
+            | bash -s -- --dir "$install_dir" --version 0.7.27
+          echo "$install_dir" >> "$GITHUB_PATH"
 
-      - name: Cache Chez Scheme (macOS)
-        if: runner.os == 'macOS'
-        id: cache-chez-macos
-        uses: actions/cache@v4
-        with:
-          path: ~/chez
-          key: chez-${{ runner.os }}-${{ runner.arch }}-v10.4.1-x11off-v1
-
-      - name: Build official Chez Scheme v10.4.1 from source (macOS)
-        if: runner.os == 'macOS' && steps.cache-chez-macos.outputs.cache-hit != 'true'
+      - name: Assert released Jolt v0.7.27
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch v10.4.1 \
-            https://github.com/cisco/ChezScheme.git "$RUNNER_TEMP/chez-src"
-          cd "$RUNNER_TEMP/chez-src"
-          ./configure --installprefix="$HOME/chez" --threads --disable-x11
-          make -j"$(sysctl -n hw.ncpu)"
-          make install
-
-      - name: Provide the source-built Chez entry point
-        shell: bash
-        run: |
-          set -euo pipefail
-          bindir="$HOME/chez/bin"
-          test -x "$bindir/scheme"
-          printf '#!/bin/sh\nexec %s "$@"\n' "$bindir/scheme" > "$bindir/chez"
-          chmod +x "$bindir/chez"
-          echo "$bindir" >> "$GITHUB_PATH"
-
-      - name: Assert official Chez v10.4.1
-        shell: bash
-        run: |
-          set -euo pipefail
-          chez --version | tee /tmp/chez-version
-          grep -Fq '10.4.1' /tmp/chez-version
+          jolt --version | tee "$RUNNER_TEMP/jolt-version"
+          grep -Fxq 'jolt v0.7.27' "$RUNNER_TEMP/jolt-version"
 
       # Best-effort: libhegel is a downloaded native library, and a release-asset
       # fetch is not a reason to lose the socket coverage. The suite degrades to
@@ -227,9 +165,7 @@ jobs:
       - name: Install jolt-hegel (property-test engine)
         continue-on-error: true
         working-directory: jolt-net
-        env:
-          JOLT_UPSTREAM: ${{ github.workspace }}/jolt-upstream
-        run: ./bin/jnc -A:test -m hegel.install
+        run: jolt -Srepro -A:test -m hegel.install
 
       - name: Refresh this platform's probed ABI facts
         working-directory: jolt-net
@@ -238,9 +174,7 @@ jobs:
 
       - name: Run the suite
         working-directory: jolt-net
-        env:
-          JOLT_UPSTREAM: ${{ github.workspace }}/jolt-upstream
-        run: ./bin/jnc -M:test
+        run: jolt -Srepro -M:test
 
       # If the freshly probed facts differ from what is committed, surface the
       # exact drift alongside the hard comparison in the tables job.
