@@ -38,16 +38,17 @@ Do not summarize this file as "supports Linux, macOS and Windows."
   Windows until that backend and real `getsockopt(SO_ERROR)` calls are verified.
 - **macOS runtime evidence.** The earlier gate showed that a typed
   three-argument signature is not enough for variadic `fcntl` on Apple arm64:
-  the third argument uses the variadic stack ABI. The core binding now declares
-  `{:varargs-after 2}`, and jolt-net reads `F_GETFL` back before marking a
-  handle. The complete poller, connect, close-race, SIGPIPE, and sliced-I/O
-  suite passed on the macOS arm64 runner for commit `65a0f1e` in
-  [CI run 30078697403](https://github.com/casselc/jolt-net/actions/runs/30078697403).
-  There is no fallback to the old uninterruptible accept path.
+  the third argument uses the variadic stack ABI. The released binding now puts
+  `:varargs` after the two fixed argument types, and jolt-net reads `F_GETFL`
+  back before marking a handle. The CI suite exercises the complete poller,
+  connect, close-race, SIGPIPE, and sliced-I/O path on macOS arm64. There is no
+  fallback to the old uninterruptible accept path.
 - **Readiness hot-path shape.** Listener, connected, and accepted descriptors
-  enter nonblocking mode once. A scoped core FFI primitive pins and exposes the
-  validated interior pointer for every byte-array slice, so partial recv/send
-  calls allocate no temporary array and copy no payload bytes.
+  enter nonblocking mode once. Released Jolt uses scoped native scratch for each
+  byte-array slice: receives copy into the caller's requested range with
+  `read-into!`, while sends copy the requested range with sliced `write-array`.
+  A future directional loan API can remove those boundary copies without
+  changing the socket contract.
 - **Interrupted poll.** POSIX `EINTR` is retried against the same absolute
   monotonic deadline; interruption does not restart or extend the caller's
   timeout. Wake-pipe reads and writes also retry `EINTR` while retaining the
