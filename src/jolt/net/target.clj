@@ -2,9 +2,9 @@
   "Per-target socket ABI facts: constants, struct layouts, handle width, and the
   error-code tables.
 
-  Pure data and pure functions -- no FFI, no side effects, nothing loaded. That is
-  deliberate: it means a Linux test can assert on the Windows or macOS descriptor
-  as an ordinary value, without pretending that doing so is native validation.
+  Descriptor selection is pure data. Host detection is kept here as a narrow
+  compatibility helper built from released System properties and pointer size,
+  so consumers do not depend on the unreleased `jolt.host/target` proposal.
 
   FAILS CLOSED. An unrecognized target throws rather than falling back to a
   similar-looking one. Guessing here does not produce a wrong answer, it produces
@@ -16,7 +16,8 @@
   tools/probe-constants.sh; each descriptor records how it was verified under
   :evidence, and jolt.net.target-test diffs the probed descriptors against
   tools/probed/*.edn so drift is a test failure. See docs/PLATFORM-COVERAGE.md."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [jolt.ffi :as ffi]))
 
 ;; --- Linux ------------------------------------------------------------------
 ;; :evidence :probed -- tools/probed/linux-x86-64.edn, native cc.
@@ -174,6 +175,27 @@
    [:darwin :aarch64 64] darwin
    [:darwin :x86-64 64] darwin})
 
+(defn current-target
+  "Return the normalized host tuple needed to select a socket ABI descriptor.
+
+  This intentionally exposes only `:os`, `:arch`, and `:pointer-bits`: those are
+  the facts this library consumes. Unknown values remain `:unknown` so
+  [[descriptor]] fails closed rather than guessing."
+  []
+  (let [os-name (str/lower-case (or (System/getProperty "os.name") ""))
+        arch-name (str/lower-case (or (System/getProperty "os.arch") ""))]
+    {:os (cond
+           (str/includes? os-name "linux") :linux
+           (or (str/includes? os-name "mac")
+               (str/includes? os-name "darwin")) :darwin
+           (str/includes? os-name "win") :windows
+           :else :unknown)
+     :arch (cond
+             (contains? #{"amd64" "x86_64" "x86-64"} arch-name) :x86-64
+             (contains? #{"aarch64" "arm64"} arch-name) :aarch64
+             :else :unknown)
+     :pointer-bits (* 8 (ffi/sizeof :pointer))}))
+
 (defn supported-target?
   "Is `t` (a jolt.host/target-shaped map) a target jolt-net has facts for?"
   [t]
@@ -190,7 +212,7 @@
   Throws :unsupported-target rather than guessing. The message names the observed
   target and lists what is supported, because the actionable fix is either to add
   a probed descriptor or to run on a supported host."
-  ([] (descriptor (jolt.host/target)))
+  ([] (descriptor (current-target)))
   ([t]
    (or (get descriptors [(:os t) (:arch t) (:pointer-bits t)])
        (throw (ex-info (str "jolt.net: unsupported target "

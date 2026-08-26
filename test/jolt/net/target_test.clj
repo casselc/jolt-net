@@ -77,7 +77,7 @@
 (defn run! []
   (c/section "target: selection and fail-closed behavior")
 
-  (c/check-pred "this host is a supported target" true? (t/supported-target? (jolt.host/target)))
+  (c/check-pred "this host is a supported target" true? (t/supported-target? (t/current-target)))
   (c/check-pred "descriptor resolves for this host" map? (t/descriptor))
 
   ;; Fail closed. Each of these would be a wrong struct offset if guessed.

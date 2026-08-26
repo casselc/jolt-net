@@ -5,10 +5,8 @@
 ;; the byte contract in a separate, optional namespace and must never be required
 ;; to open a plain TCP socket.
 ;;
-;; REQUIRES THE LOCAL JOLT FORK. Released joltc v0.4.15 lacks the target,
-;; monotonic-clock, errno, 16-bit-type, scoped array-slice, and variadic-boundary
-;; primitives. Use bin/jnc, which points at the fork and fails with a readable
-;; message instead of an unbound-var error. See docs/UPSTREAM-NOTES.md.
+;; Requires Jolt v0.7.27 or newer. See docs/UPSTREAM-NOTES.md for the retired
+;; proposal-fork prerequisites and the remaining optional zero-copy opportunity.
 ;;
 ;; libc is resolved from the running process (:process true) because the socket
 ;; and resolver symbols live in the already-loaded process image. The Windows
@@ -24,15 +22,13 @@
  ;; never become a runtime dependency of a socket layer. Pinned to the reviewed
  ;; direct-libhegel branch commit. Because
  ;; the dep is alias-scoped, the installer needs the alias too:
- ;;   bin/jnc -A:test -m hegel.install
+ ;;   jolt -A:test -m hegel.install
  :aliases {:test {:extra-paths ["test"]
                   :extra-deps {io.github.chucklehead-dev/jolt-hegel
                                {:git/url "https://github.com/chucklehead-dev/jolt-hegel.git"
-                                :git/sha "4910faed4dc86ee54c6afc1a99dcb9a5bca6e840"}}
+                                :git/sha "53631c81cd927175935037699ddf687d98a44d24"}}
                   :main-opts ["-m" "jolt.net.test-main"]}
            :sigpipe {:extra-paths ["test"]
                      :main-opts ["-m" "jolt.net.sigpipe-child"]}}
 
- ;; Deliberately NOT `joltc -M:test`: a bare `joltc` resolves to the stock
- ;; v0.4.15 on PATH, which cannot load this library at all.
- :tasks {test "bin/jnc -M:test"}}
+ :tasks {test "jolt -M:test"}}
