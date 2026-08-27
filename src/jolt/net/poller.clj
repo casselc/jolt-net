@@ -489,23 +489,57 @@
           {:result result :code code})
         {:result result}))))
 
+(defn- monotonic-nanos
+  "Read the deadline clock. The optional map hook makes publication ordering
+  tests deterministic; production pollers use the released runtime clock."
+  [poller]
+  (if-let [clock (:jolt.net/monotonic-nanos poller)]
+    (clock)
+    (System/nanoTime)))
+
+(defn wake-cursor
+  "Read this poller's monotonic wake cursor.
+
+  Sample it before reading producer-owned state, then pass it to await-ready.
+  Wakes above that boundary describe publications the consumer may not have
+  observed and must arm the wait. This read is total across lifecycle phases;
+  await-ready remains the lifecycle gate."
+  [poller]
+  @(:wake-sequence poller))
+
 (defn await-ready
   "Wait up to timeout-ms for readiness and return
   [{:token token :events #{:read ...}} ...].
 
   The native wait is capped at one second, so even a missed platform wake cannot
   make close unbounded. Error and hangup are reported independently of requested
-  interests; readable data is never discarded merely because hangup is also set."
-  [poller timeout-ms]
+  interests; readable data is never discarded merely because hangup is also set.
+
+  The three-argument arity takes a cursor sampled before the caller reads
+  producer-owned state. The two-argument arity keeps await entry as its
+  boundary for one-shot waiters with no earlier state read."
+  ([poller timeout-ms] (await-ready poller timeout-ms nil))
+  ([poller timeout-ms cursor]
   (require-posix! :await-ready)
   (when-not (and (integer? timeout-ms) (not (neg? timeout-ms)))
     (throw (err/invalid-ex :await-ready
                            "timeout-ms must be a non-negative integer"
                            {:jolt.net/timeout-ms timeout-ms})))
-  ;; Linearization boundary for explicit wake: an epoch after this read belongs
-  ;; to this await even if it arrives between enter-await! and the pre-snapshot
-  ;; drain. Epochs already visible here predate the await and may be consumed.
-  (let [entry-wake-sequence @(:wake-sequence poller)]
+  (when-not (or (nil? cursor) (integer? cursor))
+    (throw (err/invalid-ex :await-ready
+                           "cursor must be nil or a wake-cursor value"
+                           {:jolt.net/wake-cursor cursor})))
+  ;; A supplied cursor moves the boundary back to the caller's state read.
+  ;; A cursor above the live sequence cannot have come from this poller and
+  ;; would incorrectly classify real publications as stale.
+  (let [live @(:wake-sequence poller)
+        _ (when (and cursor (> cursor live))
+            (throw (err/invalid-ex
+                    :await-ready
+                    "cursor is ahead of this poller's wake sequence"
+                    {:jolt.net/wake-cursor cursor
+                     :jolt.net/wake-sequence live})))
+        entry-wake-sequence (or cursor live)]
     (enter-await! poller)
     (let [wake-lease (atom nil)
           socket-leases (atom [])]
@@ -538,12 +572,12 @@
                 (ffi/write p :int16 (:events layout)
                            (interest-mask (:interests entry)))
                 (ffi/write p :int16 (:revents layout) 0)))
-            (let [deadline (+ (System/nanoTime)
+            (let [deadline (+ (monotonic-nanos poller)
                               (* timeout-ms 1000000))
                   poll-result
                   (loop []
                     (let [remaining (max 0 (- deadline
-                                              (System/nanoTime)))
+                                              (monotonic-nanos poller)))
                           remaining-ms (quot (+ remaining 999999) 1000000)
                           wait-ms (min remaining-ms max-native-wait-ms)
                           outcome (poll-once poller buf n wait-ms)
@@ -554,7 +588,7 @@
                           ;; A signal does not consume the caller's timeout.
                           ;; Retry against the same absolute monotonic deadline.
                           (if (= code (t/errno-code d :eintr))
-                            (if (< (System/nanoTime) deadline)
+                            (if (< (monotonic-nanos poller) deadline)
                               (recur)
                               ;; poll may leave revents undefined on failure.
                               ;; A deadline-expired interruption is therefore a
@@ -566,7 +600,7 @@
                         ;; return from the caller's timeout.
                         (and (zero? result)
                              (pos? remaining)
-                             (< (System/nanoTime) deadline))
+                             (< (monotonic-nanos poller) deadline))
                         (recur)
 
                         :else result)))]
@@ -597,4 +631,4 @@
         (finally
           (doseq [lease @socket-leases] (h/release! lease))
           (when-let [lease @wake-lease] (h/release! lease))
-          (exit-await! poller))))))
+          (exit-await! poller)))))))

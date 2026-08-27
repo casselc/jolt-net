@@ -228,9 +228,12 @@
           (throw (err/invalid-ex :accept "listener is closed" nil)))
         (poller/register! p listener #{:read})
         (loop []
-          (let [accepted (try-accept listener)]
+          ;; Sample before try-accept reads listener state. A close or
+          ;; registration publication after that read must arm the wait.
+          (let [cursor (poller/wake-cursor p)
+                accepted (try-accept listener)]
             (if (= would-block accepted)
-              (do (poller/await-ready p 1000) (recur))
+              (do (poller/await-ready p 1000 cursor) (recur))
               accepted)))
         (finally
           (when-let [id @terminal-listener]
@@ -631,7 +634,15 @@
   [p]
   (poller/wake! p))
 
+(defn wake-cursor
+  "Sample p's monotonic wake cursor before reading producer-owned state."
+  [p]
+  (poller/wake-cursor p))
+
 (defn await-ready
-  "Wait up to timeout-ms and return readiness maps carrying current tokens."
-  [p timeout-ms]
-  (poller/await-ready p timeout-ms))
+  "Wait up to timeout-ms and return readiness maps carrying current tokens.
+
+  With a cursor from wake-cursor, wakes above that state-read boundary arm the
+  wait instead of being consumed as stale."
+  ([p timeout-ms] (poller/await-ready p timeout-ms))
+  ([p timeout-ms cursor] (poller/await-ready p timeout-ms cursor)))
