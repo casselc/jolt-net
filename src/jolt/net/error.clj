@@ -13,8 +13,12 @@
      runs before the read makes the caller report the cleanup's error instead of
      the real one. That is not hypothetical: teensyp.ffi-net's constructors call
      close before reading errno, so a failed bind can surface as whatever close
-     set. `checked` below makes the ordering structural rather than a convention
-     each call site has to remember."
+     set. Every failing call in this library is bound with
+     {:capture-native-error true} (jolt.net.ffi/invoke-captured), so the native
+     result and its error code arrive together as one atomic [result code] pair
+     from the foreign-call return path itself -- there is no separate accessor
+     call left to interpose cleanup before. `checked` below makes that ordering
+     structural rather than a convention each call site has to remember."
   (:require [jolt.ffi :as ffi]
             [jolt.net.target :as t]
             [jolt.net.ffi :as nffi]))
@@ -33,16 +37,6 @@
 (defn eof? [x] (= x ::eof))
 (defn in-progress? [x] (= x ::in-progress))
 (defn connected? [x] (= x ::connected))
-
-;; --- capture ----------------------------------------------------------------
-(defn capture
-  "This thread's last native error code, RIGHT NOW.
-
-  Must be called immediately after the failing call, before anything else --
-  jolt.ffi/errno itself makes exactly one native call and no other, but any
-  cleanup the caller performs first will have overwritten the value."
-  []
-  (ffi/errno))
 
 ;; --- classification ---------------------------------------------------------
 ;; The kind set is deliberately small and closed (per the accepted design). It
@@ -127,12 +121,16 @@
 
 ;; --- the ordering combinator ------------------------------------------------
 (defn checked
-  "Run `thunk`; if `fail?` says its result is a failure, capture the native error
-  IMMEDIATELY and throw.
+  "Run `thunk`, which must return the atomically captured [native-result
+  error-code] pair from a jolt.net.ffi/invoke-captured call (see jolt.net.ffi
+  and docs/ffi-native-error-capture.md). If `fail?` says native-result is a
+  failure, throw using the code already captured in that same pair.
 
-  The capture is lexically the first thing after the result binding, with nothing
-  between them. Callers put rollback in a catch/finally, never in the failure
-  branch, so cleanup provably runs after the capture:
+  Because the code arrived atomically with the result -- captured in Chez's
+  foreign-call return path before Jolt code, including a :blocking call's
+  collect-safe thread reactivation, could run -- there is no separate accessor
+  call left to interpose cleanup before. Callers put rollback in a
+  catch/finally, never in the failure branch:
 
       (let [h (checked :socket invalid? #(...) ctx)]
         (try (checked :bind neg? #(...) ctx)
@@ -140,14 +138,13 @@
              (catch :default e (raw-close! h) (throw e))))
 
   `ctx` must be an already-evaluated value, never an expression containing a
-  native call -- that would run between the failing call and the capture."
+  native call -- that would run between the failing call and the throw."
   ([op fail? thunk] (checked op fail? thunk nil))
   ([op fail? thunk ctx]
-   (let [r (thunk)]
-     (if (fail? r)
-       (let [code (capture)]        ;; nothing may be interposed here
-         (throw (native-ex op code ctx)))
-       r))))
+   (let [[result code] (thunk)]
+     (if (fail? result)
+       (throw (native-ex op code ctx))
+       result))))
 
 ;; --- resolver errors --------------------------------------------------------
 ;; getaddrinfo returns its code DIRECTLY and does not set errno (except

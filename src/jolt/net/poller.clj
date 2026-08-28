@@ -210,15 +210,16 @@
   nil)
 
 (defn- wake-call
-  "Invoke one non-blocking wake-pipe syscall and capture errno immediately.
-  The keyed hook is a deterministic test seam with the same result-map shape."
+  "Invoke one non-blocking wake-pipe syscall through the atomically captured
+  binding, so its error code (when the result is negative) arrived with the
+  result rather than from a separate post-call read. The keyed hook is a
+  deterministic test seam with the same result-map shape."
   [poller hook-key op raw buf len]
   (if-let [hook (get poller hook-key)]
     (hook raw buf len)
-    (let [result (nffi/invoke op raw buf len)]
+    (let [[result code] (nffi/invoke-captured op raw buf len)]
       (if (neg? result)
-        (let [code (err/capture)]
-          {:result result :code code})
+        {:result result :code code}
         {:result result}))))
 
 (defn- ensure-wake-byte! [poller]
@@ -329,7 +330,7 @@
   (require-posix! :open-poller)
   (let [fds (ffi/alloc 8)]
     (try
-      (err/checked :pipe neg? #(nffi/invoke :pipe fds))
+      (err/checked :pipe neg? #(nffi/invoke-captured :pipe fds))
       (let [read-raw (ffi/read fds :int 0)
             write-raw (ffi/read fds :int 4)]
         (try
@@ -478,15 +479,16 @@
           (recur))))))
 
 (defn- poll-once
-  "Invoke poll and capture errno before any other native call. The optional map
-  hook is an internal deterministic EINTR test seam."
+  "Invoke poll through its atomically captured binding, so a negative result's
+  error code arrived with it -- poll is :blocking, and a separate post-call
+  errno read would race Chez's collect-safe thread reactivation. The optional
+  map hook is an internal deterministic EINTR test seam."
   [poller buf n wait-ms]
   (if-let [hook (:jolt.net/poll-call poller)]
     (hook buf n wait-ms)
-    (let [result (nffi/invoke :poll buf n wait-ms)]
+    (let [[result code] (nffi/invoke-captured :poll buf n wait-ms)]
       (if (neg? result)
-        (let [code (err/capture)]
-          {:result result :code code})
+        {:result result :code code}
         {:result result}))))
 
 (defn await-ready

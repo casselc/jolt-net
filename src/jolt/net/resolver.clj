@@ -73,12 +73,15 @@
                           (if (addr/numeric-host? host) (t/const d :ai-numerichost) 0)))
        (ffi/write respp :pointer 0 ffi/null)
 
-       (let [rc (nffi/c-getaddrinfo node service hints respp)]
+       (let [[rc sys] (nffi/c-getaddrinfo node service hints respp)]
          (when-not (zero? rc)
-           ;; EAI_SYSTEM defers to errno, so capture it immediately -- before the
-           ;; finally below runs any ffi/free, which would overwrite it.
-           (let [sys (when (= rc (t/gai-code d :system)) (err/capture))]
-             (throw (err/gai-ex rc sys ctx))))
+           ;; sys is captured atomically with rc in the foreign-call return
+           ;; path (c-getaddrinfo is bound {:capture-native-error true}), so it
+           ;; is already valid here -- a separate post-call errno read would be
+           ;; unsound for this :blocking call, since Chez's collect-safe thread
+           ;; reactivation runs before Jolt code and can disturb the slot
+           ;; first. It is meaningful only for EAI_SYSTEM; discard it otherwise.
+           (throw (err/gai-ex rc (when (= rc (t/gai-code d :system)) sys) ctx)))
 
          (let [head (ffi/read respp :pointer 0)]
            (try

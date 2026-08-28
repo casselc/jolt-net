@@ -24,15 +24,15 @@
   ([raw] (set-raw! raw nil))
   ([raw ctx]
    (let [get-flags #(err/checked :fcntl-getfl neg?
-                                  (fn [] (nffi/invoke :fcntl
-                                                      raw
-                                                      (t/const d :f-getfl)
-                                                      0))
+                                  (fn [] (nffi/invoke-captured :fcntl
+                                                               raw
+                                                               (t/const d :f-getfl)
+                                                               0))
                                   ctx)
          before (get-flags)
          desired (bit-or before (t/const d :o-nonblock))]
      (err/checked :fcntl-setfl neg?
-                  #(nffi/invoke :fcntl raw (t/const d :f-setfl) desired)
+                  #(nffi/invoke-captured :fcntl raw (t/const d :f-setfl) desired)
                   ctx)
      (let [observed (get-flags)]
        (when-not (enabled? observed)

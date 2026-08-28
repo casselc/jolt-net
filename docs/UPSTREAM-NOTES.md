@@ -16,8 +16,8 @@ The checkout now runs on stock Jolt.
 | `jolt.host/target` | Not released; dependency removed | `jolt.net.target/current-target` normalizes `os.name`, `os.arch`, and `ffi/sizeof :pointer`, then the existing tuple table still fails closed. |
 | `System/nanoTime` over a real monotonic clock | Released in 0.5.16 | Deadlines must not follow a stepping wall clock. |
 | `:int16` / `:uint16` / `:short` / `:ushort` | Released in 0.7.21 | Describe socket structures without endian-dependent half-word packing. |
-| `jolt.ffi/errno` | Released in 0.7.12 | Read the calling thread's native error immediately after failure. |
-| `jolt.ffi/with-byte-array-pointer` | Not released; dependency removed | Reads use scoped scratch plus `read-into!`; writes use scoped scratch plus sliced `write-array`. A future loan API could remove these copies without changing the public socket contract. |
+| `{:capture-native-error true}` on `jolt.ffi/defcfn`/`foreign-fn` | Released in 0.7.28 | Capture errno/GetLastError atomically with the result. A follow-up read is unsound for `:blocking` calls because collect-safe thread reactivation runs before Jolt code. |
+| `jolt.ffi/with-byte-array-pointer` | Not released; dependency removed | Reads use scoped scratch plus `read-into!`; writes use scoped scratch plus sliced `write-array`. The gated fork branch can remove these copies later without changing the socket contract. |
 | `:varargs` in the `defcfn` argument vector | Released in 0.6.8 | Mark the fixed/variadic ABI boundary; this replaces the proposal's older `{:varargs-after n}` spelling. |
 
 The historical proposal commits remain useful design evidence, but no proposal

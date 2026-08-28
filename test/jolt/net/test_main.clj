@@ -21,15 +21,15 @@
 
   (c/section "scaffold")
   ;; The scaffold's own gate proves the released runtime exposes the primitives
-  ;; this socket layer actually consumes.
+  ;; this socket layer actually consumes. Native-error capture is a defcfn-time
+  ;; option rather than a queryable capability, so an older runtime fails while
+  ;; loading jolt.net.ffi before this runner can begin.
   (c/check-pred "current target resolves an os"
                 #(contains? #{:linux :darwin :windows} %)
                 (:os (target/current-target)))
   (c/check-pred "current target reports pointer width"
                 #(or (= 32 %) (= 64 %))
                 (:pointer-bits (target/current-target)))
-  (c/check-pred "released jolt.ffi/errno is available"
-                integer? (jolt.ffi/errno))
   (c/check-pred "released System/nanoTime is monotonic-shaped"
                 integer? (System/nanoTime))
   (c/check-pred "released 16-bit foreign types exist"

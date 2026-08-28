@@ -91,12 +91,12 @@
        :jolt.net/expected-flag nonblock
        :jolt.net/observed-flags 0}
       #(with-redefs
-         [nffi/invoke
+         [nffi/invoke-captured
           (fn [op raw command arg]
             (swap! calls conj [op raw command arg])
             ;; Model the Darwin ABI failure that motivated the guard: F_SETFL
             ;; appears successful, but the third argument never takes effect.
-            0)]
+            [0 nil])]
          (nb/set-raw! 73)))
     (c/check "the fail-closed transition verifies after setting the flag"
              [getfl setfl getfl]
