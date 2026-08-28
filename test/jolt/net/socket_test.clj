@@ -7,6 +7,12 @@
             [jolt.net.handle :as h]
             [jolt.net.error :as err]))
 
+(defn- jolt-executable
+  "The runtime under test. JOLT_EXE is Jolt's standard self-reinvoke contract;
+  falling back to PATH preserves the installed-runtime test workflow."
+  []
+  (or (System/getenv "JOLT_EXE") "jolt"))
+
 (defn- ipv6-available?
   "Probe rather than assume: containers routinely lack ::1, and a hard failure
   there would be reporting an environment gap as a jolt-net defect."
@@ -97,7 +103,7 @@
     (let [project-root (or (System/getenv "JOLT_PWD")
                            (System/getProperty "user.dir")
                            ".")
-          result (shell/sh "jolt" "-M:sigpipe"
+          result (shell/sh (jolt-executable) "-M:sigpipe"
                            :dir project-root)]
       (c/check "closed-peer write survives SIGPIPE in a subprocess"
                0 (:exit result))))
