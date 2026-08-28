@@ -507,6 +507,21 @@
                [] (deref waiting 500 ::timed-out))
       (finally (net/close! poller))))
 
+  (let [poller (net/open-poller)]
+    (try
+      ;; A reactor publishes work and then wakes. If publication wins just
+      ;; before the reactor enters await, that wake must remain a one-shot
+      ;; notification rather than being drained as an old mutation wake.
+      (net/wake! poller)
+      (let [start (System/nanoTime)
+            result (net/await-ready poller 2500)
+            elapsed (- (System/nanoTime) start)]
+        (c/check "explicit wake before await is retained"
+                 [] result)
+        (c/check-pred "retained wake returns without the safety poll"
+                      #(< % 500000000) elapsed))
+      (finally (net/close! poller))))
+
   (let [base (net/open-poller)
         waits (atom [])
         eintr (get-in (net/target-descriptor) [:errno :eintr])
@@ -591,7 +606,9 @@
       ;; can observe the old true gate after its byte was drained and write
       ;; nothing, allowing the native poll to park.
       (dotimes [_ 100]
-        (net/wake! poller)
+        ;; Seed an internal acknowledged-state wake, not the public durable
+        ;; notification whose contract is covered separately above.
+        (@#'poller/signal-wake! poller)
         (let [waiting (future (net/await-ready poller 500))]
           (when-not (wait-for-await! poller)
             (reset! all-woke? false))

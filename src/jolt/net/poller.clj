@@ -264,6 +264,23 @@
   (swap! (:wake-sequence poller) inc)
   (ensure-wake-byte! poller))
 
+(defn- claim-explicit-wake!
+  "Consume every explicit wake epoch published before this claim. Returns true
+  when at least one epoch was pending. A wake racing after the successful CAS
+  remains newer than :explicit-wake-consumed and is claimed by this await after
+  poll returns, or by the next await before it parks."
+  [poller]
+  (let [consumed (:explicit-wake-consumed poller)
+        published (:explicit-wake-sequence poller)]
+    (loop []
+      (let [old @consumed
+            current @published]
+        (if (>= old current)
+          false
+          (if (compare-and-set! consumed old current)
+            true
+            (recur)))))))
+
 (defn- submit! [poller mutation]
   (let [ack (promise)
         entry (assoc mutation :ack ack)]
@@ -347,6 +364,11 @@
                  :draining (atom false)
                  :wake-pending (atom false)
                  :wake-sequence (atom 0)
+                 ;; Public wake! is a durable one-shot notification. Keep its
+                 ;; epoch separate from registration-mutation pipe wakes, which
+                 ;; are acknowledged state and may be drained before polling.
+                 :explicit-wake-sequence (atom 0)
+                 :explicit-wake-consumed (atom 0)
                  :wake-admission (atom {:phase :open :writers 0})
                  :next-registration (atom 0)
                  :wake-read read-h
@@ -394,9 +416,10 @@
   (submit! poller {:op :remove :token token}))
 
 (defn wake!
-  "Wake one blocked await. Multiple outstanding wakes are coalesced."
+  "Wake the current or next await. Multiple outstanding wakes are coalesced."
   [poller]
   (require-open! poller :wake)
+  (swap! (:explicit-wake-sequence poller) inc)
   (signal-wake! poller))
 
 (defn- interest-mask [interests]
@@ -523,79 +546,86 @@
               _ (when (not= entry-wake-sequence
                             @(:wake-sequence poller))
                   (ensure-wake-byte! poller))
-              snapshot (acquire-snapshot poller)
-              _ (reset! socket-leases (:leases snapshot))
-              entries (:entries snapshot)
-              layout (t/layout d :pollfd)
-              size (:size layout)
-              n (+ 1 (count entries))
-              buf (ffi/alloc (* size n))]
-          (try
-            (ffi/write buf :int (:fd layout) (:raw wl))
-            (ffi/write buf :int16 (:events layout) (t/const d :pollin))
-            (ffi/write buf :int16 (:revents layout) 0)
-            (doseq [[idx entry] (map-indexed vector entries)]
-              (let [p (+ buf (* size (inc idx)))]
-                (ffi/write p :int (:fd layout) (:raw entry))
-                (ffi/write p :int16 (:events layout)
-                           (interest-mask (:interests entry)))
-                (ffi/write p :int16 (:revents layout) 0)))
-            (let [deadline (+ (System/nanoTime)
-                              (* timeout-ms 1000000))
-                  poll-result
-                  (loop []
-                    (let [remaining (max 0 (- deadline
-                                              (System/nanoTime)))
-                          remaining-ms (quot (+ remaining 999999) 1000000)
-                          wait-ms (min remaining-ms max-native-wait-ms)
-                          outcome (poll-once poller buf n wait-ms)
-                          result (:result outcome)]
-                      (cond
-                        (neg? result)
-                        (let [code (:code outcome)]
-                          ;; A signal does not consume the caller's timeout.
-                          ;; Retry against the same absolute monotonic deadline.
-                          (if (= code (t/errno-code d :eintr))
-                            (if (< (System/nanoTime) deadline)
-                              (recur)
-                              ;; poll may leave revents undefined on failure.
-                              ;; A deadline-expired interruption is therefore a
-                              ;; timeout sentinel, not an empty native result.
-                              nil)
-                            (throw (err/native-ex :poll code nil))))
+              explicit-wake? (claim-explicit-wake! poller)]
+          (if explicit-wake?
+            []
+            (let [snapshot (acquire-snapshot poller)
+                  _ (reset! socket-leases (:leases snapshot))
+                  entries (:entries snapshot)
+                  layout (t/layout d :pollfd)
+                  size (:size layout)
+                  n (+ 1 (count entries))
+                  buf (ffi/alloc (* size n))]
+              (try
+                (ffi/write buf :int (:fd layout) (:raw wl))
+                (ffi/write buf :int16 (:events layout) (t/const d :pollin))
+                (ffi/write buf :int16 (:revents layout) 0)
+                (doseq [[idx entry] (map-indexed vector entries)]
+                  (let [p (+ buf (* size (inc idx)))]
+                    (ffi/write p :int (:fd layout) (:raw entry))
+                    (ffi/write p :int16 (:events layout)
+                               (interest-mask (:interests entry)))
+                    (ffi/write p :int16 (:revents layout) 0)))
+                (let [deadline (+ (System/nanoTime)
+                                  (* timeout-ms 1000000))
+                      poll-result
+                      (loop []
+                        (let [remaining (max 0 (- deadline
+                                                  (System/nanoTime)))
+                              remaining-ms (quot (+ remaining 999999) 1000000)
+                              wait-ms (min remaining-ms max-native-wait-ms)
+                              outcome (poll-once poller buf n wait-ms)
+                              result (:result outcome)]
+                          (cond
+                            (neg? result)
+                            (let [code (:code outcome)]
+                              ;; A signal does not consume the caller's timeout.
+                              ;; Retry against the same absolute monotonic deadline.
+                              (if (= code (t/errno-code d :eintr))
+                                (if (< (System/nanoTime) deadline)
+                                  (recur)
+                                  ;; poll may leave revents undefined on failure.
+                                  ;; A deadline-expired interruption is therefore a
+                                  ;; timeout sentinel, not an empty native result.
+                                  nil)
+                                (throw (err/native-ex :poll code nil))))
 
-                        ;; The ceiling is a lost-wake safety net, not an early
-                        ;; return from the caller's timeout.
-                        (and (zero? result)
-                             (pos? remaining)
-                             (< (System/nanoTime) deadline))
-                        (recur)
+                            ;; The ceiling is a lost-wake safety net, not an early
+                            ;; return from the caller's timeout.
+                            (and (zero? result)
+                                 (pos? remaining)
+                                 (< (System/nanoTime) deadline))
+                            (recur)
 
-                        :else result)))]
-              (if (nil? poll-result)
-                []
-                (do
-                  (let [wake-bits (ffi/read buf :int16 (:revents layout))]
-                    (when-not (zero? wake-bits)
-                      (drain-wake-pipe! poller (:raw wl))))
-                  (drain-mutations! poller)
-                  (reduce
-                    (fn [ready [idx entry]]
-                      (let [p (+ buf (* size (inc idx)))
-                            bits (ffi/read p :int16 (:revents layout))
-                            events (event-set bits)
-                            current (get @(:registrations poller)
-                                         (:jolt.net/registration
-                                           (:token entry)))]
-                        (if (and (seq events)
-                                 current
-                                 (= (:token entry) (:token current)))
-                          (conj ready
-                                {:token (:token entry) :events events})
-                          ready)))
+                            :else result)))
+                      ;; Returning from this await services every explicit epoch
+                      ;; visible now. An epoch published after this claim remains
+                      ;; pending and makes the next await return before polling.
+                      _ (claim-explicit-wake! poller)]
+                  (if (nil? poll-result)
                     []
-                    (map-indexed vector entries)))))
-            (finally (ffi/free buf))))
+                    (do
+                      (let [wake-bits (ffi/read buf :int16 (:revents layout))]
+                        (when-not (zero? wake-bits)
+                          (drain-wake-pipe! poller (:raw wl))))
+                      (drain-mutations! poller)
+                      (reduce
+                        (fn [ready [idx entry]]
+                          (let [p (+ buf (* size (inc idx)))
+                                bits (ffi/read p :int16 (:revents layout))
+                                events (event-set bits)
+                                current (get @(:registrations poller)
+                                             (:jolt.net/registration
+                                               (:token entry)))]
+                            (if (and (seq events)
+                                     current
+                                     (= (:token entry) (:token current)))
+                              (conj ready
+                                    {:token (:token entry) :events events})
+                              ready)))
+                        []
+                        (map-indexed vector entries)))))
+                (finally (ffi/free buf))))))
         (finally
           (doseq [lease @socket-leases] (h/release! lease))
           (when-let [lease @wake-lease] (h/release! lease))

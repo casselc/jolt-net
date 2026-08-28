@@ -639,7 +639,7 @@
   (poller/remove! p token))
 
 (defn wake!
-  "Wake a blocked await on p."
+  "Wake the current or next await on p. Outstanding wakes are coalesced."
   [p]
   (poller/wake! p))
 
