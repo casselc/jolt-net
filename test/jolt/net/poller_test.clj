@@ -37,6 +37,30 @@
       (zero? remaining) false
       :else (do (Thread/sleep 2) (recur (dec remaining))))))
 
+(defn- listener-reusing-raw!
+  "Obtain a distinct owned listener with target-raw, or fail after a bounded
+  number of real kernel allocations. Reuse is the premise of the regression,
+  so an environment that does not exercise it is a test failure, not a skip."
+  [target-raw attempts history]
+  (loop [remaining attempts]
+    (when (zero? remaining)
+      (throw (ex-info "bounded descriptor-reuse premise was not exercised"
+                      {:jolt.net/op :descriptor-reuse-regression
+                       :jolt.net/kind :test-non-vacuity
+                       :jolt.net/target-raw target-raw
+                       :jolt.net/history @history})))
+    (let [candidate (net/listen (net/endpoint "127.0.0.1" 0)
+                                {:reuse-address? true})]
+      (if (= target-raw (net/native-handle candidate))
+        candidate
+        (do
+          (swap! history conj
+                 {:event :reuse-miss
+                  :candidate-generation (h/generation candidate)
+                  :candidate-raw (net/native-handle candidate)})
+          (net/close! candidate)
+          (recur (dec remaining)))))))
+
 (defn- remaining-ms [deadline]
   (let [remaining (- deadline (System/nanoTime))]
     (if (pos? remaining)
@@ -353,6 +377,76 @@
         (net/close! server))))
 
   (c/section "poller mutation wake and close safety")
+  (let [p (net/open-poller)
+        history (atom [])
+        old-listener (net/listen (net/endpoint "127.0.0.1" 0)
+                                 {:reuse-address? true})
+        old-raw (net/native-handle old-listener)
+        old-generation (h/generation old-listener)
+        old-token (net/register! p old-listener #{:read})
+        old-port (:jolt.net/port (net/local-endpoint old-listener))
+        old-client (net/connect (net/endpoint "127.0.0.1" old-port))
+        replacement (atom nil)
+        replacement-client (atom nil)]
+    (try
+      (swap! history conj
+             {:seq 1 :resource-id old-generation :event :registered
+              :raw-evidence old-raw :token old-token})
+      ;; Leave real accept readiness pending, then retire the complete logical
+      ;; registration before permitting the kernel to recycle its descriptor.
+      (net/close! old-listener)
+      (swap! history conj
+             {:seq 2 :resource-id old-generation :event :closed
+              :raw-evidence old-raw})
+      (reset! replacement (listener-reusing-raw! old-raw 64 history))
+      (let [new-listener @replacement
+            new-generation (h/generation new-listener)
+            new-token (net/register! p new-listener #{:read})
+            new-port (:jolt.net/port (net/local-endpoint new-listener))]
+        (swap! history conj
+               {:seq 3 :resource-id new-generation :event :registered
+                :raw-evidence (net/native-handle new-listener)
+                :token new-token})
+        (c/check "descriptor reuse uses two distinct logical generations"
+                 [old-raw true]
+                 [(net/native-handle new-listener)
+                  (not= old-generation new-generation)])
+        (c/check "reuse history is partitioned by logical handle generation"
+                 #{old-generation new-generation}
+                 (set (map :resource-id
+                           (filter :resource-id @history))))
+        (c/check-throws "the old token cannot remove the replacement handle"
+                        {:jolt.net/kind :invalid :jolt.net/op :remove}
+                        #(net/remove-registration! p old-token))
+        (c/check "the old close-removal message cannot remove the replacement"
+                 false
+                 (@#'poller/submit!
+                   p {:op :remove-closed
+                      :registration (:jolt.net/registration old-token)
+                      :generation old-generation}))
+        (reset! replacement-client
+                (net/connect (net/endpoint "127.0.0.1" new-port)))
+        (let [ready (net/await-ready p 1000)]
+          (swap! history conj
+                 {:seq 4 :resource-id new-generation :event :ready
+                  :raw-evidence (net/native-handle new-listener)
+                  :tokens (mapv :token ready)})
+          (c/check "reused descriptor readiness belongs only to replacement"
+                   [new-token]
+                   (mapv :token ready))
+          (c/check "stale token is absent from stable bounded history"
+                   false
+                   (boolean
+                     (some #(and (= :ready (:event %))
+                                 (some #{old-token} (:tokens %)))
+                           @history)))))
+      (finally
+        (when @replacement-client (net/close! @replacement-client))
+        (when @replacement (net/close! @replacement))
+        (net/close! old-client)
+        (net/close! old-listener)
+        (net/close! p))))
+
   (let [[client server] (connected-pair)
         poller (net/open-poller)
         token (net/register! poller server #{:read})]

@@ -5,6 +5,7 @@
             [jolt.net :as net]
             [jolt.net.target :as target]
             [jolt.net.handle :as h]
+            [jolt.net.poller :as poller]
             [jolt.net.error :as err]))
 
 (defn- jolt-executable
@@ -146,6 +147,28 @@
   ;; path. It must not hold an uninterruptible lease or enter accept(2) on an fd
   ;; that close can recycle.
   (when (contains? #{:linux :darwin} (:os (target/current-target)))
+    (let [l (net/listen (net/endpoint "127.0.0.1" 0))
+          register! poller/register!
+          data
+          (try
+            (with-redefs
+              [poller/register!
+               (fn [p listener interests]
+                 ;; Force the exact gap after accept's terminal on-close!
+                 ;; installation and before ordinary poller registration.
+                 (net/close! listener)
+                 (register! p listener interests))]
+              (net/accept l)
+              nil)
+            (catch :default e (ex-data e))
+            (finally (net/close! l)))]
+      (c/check "close between accept listeners reports listener use-after-close"
+               [:invalid :use-after-close :listener :accept]
+               [(:jolt.net/kind data)
+                (:jolt.net/op data)
+                (:jolt.net/resource data)
+                (:jolt.net/requested-op data)]))
+
     (let [l (net/listen (net/endpoint "127.0.0.1" 0))
           before (atom 0)
           after (atom 0)

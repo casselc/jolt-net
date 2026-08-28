@@ -204,6 +204,22 @@
 
 (declare try-accept)
 
+(defn- listener-closed-ex []
+  (err/invalid-ex :use-after-close "listener is closed"
+                  {:jolt.net/resource :listener
+                   :jolt.net/requested-op :accept}))
+
+(defn- register-accept-listener!
+  "Register accept's read interest, preserving listener ownership as the
+  diagnostic when close wins after the terminal callback is installed."
+  [p listener]
+  (try
+    (poller/register! p listener #{:read})
+    (catch :default e
+      (if (h/closed? listener)
+        (throw (listener-closed-ex))
+        (throw e)))))
+
 (defn accept
   "Accept one connection, blocking until one arrives.
 
@@ -225,8 +241,8 @@
         ;; terminal lifecycle. Darwin CI exposed the pre-entry race.
         (when-not (reset! terminal-listener
                           (h/on-close! listener #(poller/close! p)))
-          (throw (err/invalid-ex :accept "listener is closed" nil)))
-        (poller/register! p listener #{:read})
+          (throw (listener-closed-ex)))
+        (register-accept-listener! p listener)
         (loop []
           (let [accepted (try-accept listener)]
             (if (= would-block accepted)
