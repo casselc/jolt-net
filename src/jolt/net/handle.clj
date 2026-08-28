@@ -116,7 +116,12 @@
         (if (compare-and-set! state-atom old (update old :leases inc))
           {:handle h
            :raw (:jolt.net/raw h)
-           :generation (:jolt.net/generation h)}
+           :generation (:jolt.net/generation h)
+           ;; A lease is a linear capability. The handle-level count alone
+           ;; cannot detect releasing one token twice while another token is
+           ;; still live; that could make close observe zero and recycle the
+           ;; descriptor underneath the real operation.
+           :released? (atom false)}
           (recur))))))
 
 (defn release!
@@ -124,7 +129,14 @@
   native close when it drops the final lease after close has begun."
   [lease]
   (let [h (:handle lease)
+        released? (:released? lease)
         state-atom (:jolt.net/state h)]
+    (when-not (and released?
+                   (compare-and-set! released? false true))
+      (throw (ex-info "jolt.net: operation lease was already released"
+                      {:jolt.net/kind :invalid
+                       :jolt.net/op :release
+                       :jolt.net/reason :already-released})))
     (loop []
       (let [old @state-atom
             remaining (dec (:leases old))

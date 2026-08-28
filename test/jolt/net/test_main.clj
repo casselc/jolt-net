@@ -47,11 +47,14 @@
   ;; Loaded at RUNTIME, not in the ns form: the generative engine is a
   ;; downloaded native library, and its absence must cost us the properties
   ;; only -- not the socket coverage, which is the more important half.
-  (if-not (try (require 'jolt.net.address-property-test) true
+  (if-not (try (require 'jolt.net.address-property-test
+                        'jolt.net.handle-trace-property-test)
+               true
                (catch :default _ false))
     (c/skip "hegel generative properties"
             "libhegel unavailable here; the property engine could not be loaded")
-    (let [r (ct/run-tests 'jolt.net.address-property-test)]
+    (let [r (ct/run-tests 'jolt.net.address-property-test
+                          'jolt.net.handle-trace-property-test)]
     (c/check "hegel address properties report no failures" 0 (+ (:fail r) (:error r)))
     ;; A suite that ran ZERO properties also reports zero failures. Assert the
     ;; properties actually executed, or a require that silently stopped loading

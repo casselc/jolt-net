@@ -293,6 +293,29 @@
     (c/check "the final lease release completes native close"
              :closed (:phase @(:jolt.net/state listener))))
 
+  (let [listener (net/listen (net/endpoint "127.0.0.1" 0))
+        lease-a (h/acquire! listener)
+        lease-b (h/acquire! listener)
+        lease-b-released? (atom false)]
+    (try
+      (h/release! lease-a)
+      (c/check-throws "a lease token cannot be released twice"
+                      {:jolt.net/kind :invalid
+                       :jolt.net/op :release
+                       :jolt.net/reason :already-released}
+                      #(h/release! lease-a))
+      (net/close! listener)
+      (c/check "double release cannot close beneath another live lease"
+               :closing (:phase @(:jolt.net/state listener)))
+      (h/release! lease-b)
+      (reset! lease-b-released? true)
+      (c/check "the distinct final lease still owns native close"
+               :closed (:phase @(:jolt.net/state listener)))
+      (finally
+        (when-not @lease-b-released?
+          (try (h/release! lease-b) (catch :default _ nil)))
+        (net/close! listener))))
+
   (c/section "poller tokens and readiness")
   (let [[client server] (connected-pair)
         poller (net/open-poller)]
