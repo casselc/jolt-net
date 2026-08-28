@@ -61,11 +61,12 @@ Ownership transfers with both `net/connected` and `net/in-progress`; neither
 
 ## Requirements
 
-Jolt v0.7.27 supplies every runtime primitive this checkout uses. The former
+Jolt v0.7.28 supplies every runtime primitive this checkout uses. The former
 proposal-fork dependencies have been removed: target selection is a narrow,
 fail-closed helper over released System properties and `ffi/sizeof`, while
 non-blocking byte I/O uses scoped native scratch plus `read-into!` and sliced
-`write-array`.
+`write-array`. Native failures use v0.7.28's atomic result/error capture, so
+blocking calls never perform an unsound follow-up `errno` read.
 
 Run the suite with the current `jolt` CLI:
 
@@ -86,9 +87,10 @@ decisions:
   `::in-progress` are tagged returns; only genuine failures throw, and they throw
   `ExceptionInfo` carrying a small closed `:kind` set plus the native `:code` —
   which is preserved even when no kind maps to it.
-- **Capture precedes cleanup.** `errno` is valid only until the next native call,
-  and `close()` is a native call. Every failure path reads the error before rolling
-  anything back. This is enforced structurally by a combinator, not by convention.
+- **The result and native error arrive together.** `errno` is valid only until
+  the next native call, and a blocking FFI return may reactivate the Scheme
+  thread before Jolt code runs. Every fallible binding uses atomic native-error
+  capture and returns `[result code]`; cleanup only sees that owned pair.
 - **Handles are opaque and idempotently closed.** A raw descriptor is available for
   diagnostics but conveys no ownership. Short operation leases prevent native
   close while a syscall is using the descriptor, and close rejects new leases

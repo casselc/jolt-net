@@ -36,9 +36,10 @@ reading `errno`, so a failed `bind` can report whatever `close` happened to set.
 An example-based test cannot rule this out in general, because whether the
 clobber is *visible* depends on which two codes collide.
 
-**Design.** `jolt.net.error/checked` reads the error lexically immediately after
-the failing call, with nothing interposed, and callers put rollback in a `catch`
-— which by construction runs later.
+**Design.** Every fallible binding uses Jolt v0.7.28's atomic native-error
+capture. The foreign-call return path produces `[result code]` before blocking
+call reactivation or Jolt cleanup can interpose; `jolt.net.error/checked`
+consumes that pair and callers put rollback in a `catch` that runs later.
 
 **Result.**
 
@@ -46,8 +47,9 @@ the failing call, with nothing interposed, and callers put rollback in a `catch`
   `fail_code=1`, `cleanup_code=2`, `reported=2`.
 - `errno-capture-ordering-corrected.smt2` — **unsat**, with core
   `{failing_call_sets_errno, capture_before_cleanup, property_violated}`.
-  The core is the informative part: the property follows from the capture
-  ordering *alone* and does not depend on the cleanup's code at all.
+  The model's `capture_before_cleanup` constraint abstracts the stronger
+  implementation fact that result and code are one foreign-return pair. The
+  property does not depend on the cleanup's code at all.
 - `errno-capture-ordering-nonvacuity.smt2` — **sat**. Witness has
   `errno_after_cleanup=2 ≠ errno_after_fail=1` and `reported=1`: a real clobber
   occurred, and the failure's own code was still reported.

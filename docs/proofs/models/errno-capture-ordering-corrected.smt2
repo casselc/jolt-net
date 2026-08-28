@@ -1,6 +1,6 @@
-; Same invariant with the ordering jolt.net.error/checked enforces: the native
-; error is captured IMMEDIATELY after the failing call, and rollback runs only
-; afterwards, from a catch block that by construction executes later.
+; Same invariant with the ordering jolt.ffi's atomic native-error return
+; enforces: result and native error are captured as one foreign-return pair,
+; and rollback runs only afterwards from a catch block.
 ;
 ; VERIFIED: unsat. unsat core:
 ;   failing_call_sets_errno, capture_before_cleanup, property_violated
@@ -22,7 +22,8 @@
 (assert (! (= errno_after_fail fail_code) :named failing_call_sets_errno))
 (assert (! (= errno_after_cleanup cleanup_code) :named cleanup_overwrites_errno))
 
-; CORRECTED ORDERING: capture reads the slot before cleanup can touch it
+; CORRECTED ORDERING abstraction: the atomic foreign-return pair owns the
+; failure code before cleanup can touch the thread-local slot.
 (assert (! (= reported errno_after_fail) :named capture_before_cleanup))
 
 ; negation of the property

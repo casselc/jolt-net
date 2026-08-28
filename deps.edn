@@ -5,7 +5,7 @@
 ;; the byte contract in a separate, optional namespace and must never be required
 ;; to open a plain TCP socket.
 ;;
-;; Requires Jolt v0.7.27 or newer. See docs/UPSTREAM-NOTES.md for the retired
+;; Requires Jolt v0.7.28 or newer. See docs/UPSTREAM-NOTES.md for the retired
 ;; proposal-fork prerequisites and the remaining optional zero-copy opportunity.
 ;;
 ;; libc is resolved from the running process (:process true) because the socket

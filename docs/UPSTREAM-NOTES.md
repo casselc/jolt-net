@@ -4,12 +4,12 @@ jolt-net is written to move into the jolt stdlib as `jolt.net`. This file record
 what that move depends on, and where jolt-net deliberately departs from the
 accepted design spike.
 
-## Current upstream boundary (revalidated 2026-08-25)
+## Current upstream boundary (revalidated 2026-08-28)
 
-Jolt v0.7.27 releases four of the original six prerequisites. The other two are
-no longer runtime requirements: jolt-net derives only the three target facts it
-consumes from released APIs, and uses scoped scratch buffers for native I/O.
-The checkout now runs on stock Jolt.
+Jolt v0.7.28 releases the native-error primitive that makes blocking-call
+failures sound. The remaining proposal APIs are no longer runtime requirements:
+jolt-net derives only the three target facts it consumes from released APIs and
+uses scoped scratch buffers for native I/O. The checkout runs on stock v0.7.28.
 
 | Primitive | Official status | Why jolt-net needs it |
 |---|---|---|
