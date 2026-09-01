@@ -261,7 +261,8 @@
         (finally (net/close! after-socket)))))
 
   (c/section "non-blocking byte I/O")
-  (let [[client server] (connected-pair)]
+  (let [[client server] (connected-pair)
+        poller (net/open-poller)]
     (try
       (let [dest (byte-array 6)
             src (byte-array [10 20 30 40 50])]
@@ -275,10 +276,20 @@
                  3 (net/try-read-bytes! server dest 2 3))
         (c/check "read and write honor both array offsets"
                  [0 0 20 30 40 0] (vec dest))
+        (net/register! poller server #{:read})
         (net/shutdown! client :write)
+        ;; shutdown queues a FIN; a nonblocking peer may still report
+        ;; would-block until the FIN is delivered. Read readiness is the
+        ;; portable synchronization boundary for the EOF assertion.
+        (c/check-pred "shutdown-write makes the peer read-ready"
+                      #(contains? (:events (first %)) :read)
+                      (net/await-ready poller 1000))
         (c/check "shutdown-write is observed as the EOF value"
                  net/eof (net/try-read-bytes! server dest 0 1)))
-      (finally (net/close! client) (net/close! server))))
+      (finally
+        (net/close! poller)
+        (net/close! client)
+        (net/close! server))))
 
   (c/section "short operation leases")
   (let [listener (net/listen (net/endpoint "127.0.0.1" 0))
