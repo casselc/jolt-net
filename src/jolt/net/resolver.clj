@@ -61,17 +61,19 @@
          lay (t/layout d :addrinfo)
          ctx {:jolt.net/endpoint ep}]
      (try
-       (dotimes [i hints-size] (ffi/write hints :uint8 i 0))
-       (ffi/write hints :int (:family lay) (family->const (:jolt.net/family ep)))
+       (dotimes [i hints-size] (nffi/write-at! hints :uint8 i 0))
+       (nffi/write-at! hints :int (:family lay)
+                       (family->const (:jolt.net/family ep)))
        ;; Without ai_socktype the resolver also returns UDP entries, and connect()
        ;; on a datagram socket spuriously "succeeds" -- a real bug jolt.mvn-http
        ;; documents at its own call site.
-       (ffi/write hints :int (:socktype lay) socktype)
-       (ffi/write hints :int (:flags lay)
-                  (bit-or (if passive? (t/const d :ai-passive) 0)
-                          ;; skip DNS entirely for a literal
-                          (if (addr/numeric-host? host) (t/const d :ai-numerichost) 0)))
-       (ffi/write respp :pointer 0 ffi/null)
+       (nffi/write-at! hints :int (:socktype lay) socktype)
+       (nffi/write-at! hints :int (:flags lay)
+                       (bit-or (if passive? (t/const d :ai-passive) 0)
+                               ;; skip DNS entirely for a literal
+                               (if (addr/numeric-host? host)
+                                 (t/const d :ai-numerichost) 0)))
+       (nffi/write-at! respp :pointer 0 ffi/null)
 
        (let [rc (nffi/c-getaddrinfo node service hints respp)]
          (when-not (zero? rc)

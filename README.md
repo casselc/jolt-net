@@ -65,7 +65,9 @@ Jolt v0.7.27 supplies every runtime primitive this checkout uses. The former
 proposal-fork dependencies have been removed: target selection is a narrow,
 fail-closed helper over released System properties and `ffi/sizeof`, while
 non-blocking byte I/O uses scoped native scratch plus `read-into!` and sliced
-`write-array`.
+`write-array`. Jolt 0.8.0 changed the public four-argument `ffi/write` order;
+jolt-net routes scalar writes through one explicit offset/value boundary and
+tests the complete suite against both the 0.7.x and 0.8.x APIs.
 
 Run the suite with the current `jolt` CLI:
 

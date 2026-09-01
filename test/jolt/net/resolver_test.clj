@@ -2,6 +2,7 @@
   (:require [jolt.net.check :as c]
             [jolt.net :as net]
             [jolt.net.address :as addr]
+            [jolt.net.ffi :as nffi]
             [jolt.ffi :as ffi]))
 
 (defn run! []
@@ -25,7 +26,7 @@
         bytes-before (vec (:jolt.net/sockaddr r))]
     (dotimes [_ 200]
       (let [p (ffi/alloc 4096)]
-        (dotimes [i 4096] (ffi/write p :uint8 i 0xA5))
+        (dotimes [i 4096] (nffi/write-at! p :uint8 i 0xA5))
         (ffi/free p)))
     (System/gc)
     (c/check "host text survives freeaddrinfo + heap churn" host-before (:jolt.net/host r))

@@ -23,6 +23,25 @@
 ;; :jolt/native {:process true} in deps.edn.
 (ffi/load-library)
 
+(def ^:private value-before-offset?
+  ;; PR #802 introduced arenas and changed the public four-argument write order
+  ;; in the same atomic API replacement.  The older runtime already exposes an
+  ;; internal symbol named __write, so that is not a usable capability marker.
+  ;; Detect the new public arena API instead of parsing a version string.
+  (boolean (ns-resolve 'jolt.ffi 'arena?)))
+
+(defn write-at!
+  "Write `value` as `type` at byte `offset` from `pointer`.
+
+  Jolt 0.8.0 changed the four-argument `jolt.ffi/write` order to match
+  babashka.ffi. This feature-detected boundary keeps jolt-net source-compatible
+  with both Jolt 0.7.28 and 0.8.x while making offset and value unambiguous at
+  every call site."
+  [pointer type offset value]
+  (if value-before-offset?
+    (ffi/write pointer type value offset)
+    (ffi/write pointer type offset value)))
+
 ;; --- POSIX ------------------------------------------------------------------
 ;; socklen_t is unsigned int on both Linux and macOS.
 (ffi/defcfn p-socket      "socket"      [:int :int :int] :int)

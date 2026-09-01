@@ -228,7 +228,7 @@
         (let [raw (:raw lease)]
           (let [buf (ffi/alloc 1)]
             (try
-              (ffi/write buf :uint8 0 1)
+              (nffi/write-at! buf :uint8 0 1)
               (loop []
                 (let [{:keys [result code]}
                       (wake-call poller :jolt.net/wake-write-call
@@ -529,15 +529,15 @@
               n (+ 1 (count entries))
               buf (ffi/alloc (* size n))]
           (try
-            (ffi/write buf :int (:fd layout) (:raw wl))
-            (ffi/write buf :int16 (:events layout) (t/const d :pollin))
-            (ffi/write buf :int16 (:revents layout) 0)
+            (nffi/write-at! buf :int (:fd layout) (:raw wl))
+            (nffi/write-at! buf :int16 (:events layout) (t/const d :pollin))
+            (nffi/write-at! buf :int16 (:revents layout) 0)
             (doseq [[idx entry] (map-indexed vector entries)]
               (let [p (+ buf (* size (inc idx)))]
-                (ffi/write p :int (:fd layout) (:raw entry))
-                (ffi/write p :int16 (:events layout)
-                           (interest-mask (:interests entry)))
-                (ffi/write p :int16 (:revents layout) 0)))
+                (nffi/write-at! p :int (:fd layout) (:raw entry))
+                (nffi/write-at! p :int16 (:events layout)
+                                (interest-mask (:interests entry)))
+                (nffi/write-at! p :int16 (:revents layout) 0)))
             (let [deadline (+ (System/nanoTime)
                               (* timeout-ms 1000000))
                   poll-result

@@ -8,6 +8,7 @@
   (:require [jolt.net.check :as c]
             [jolt.net.target :as target]
             [jolt.net.target-test :as target-test]
+            [jolt.net.ffi-test :as ffi-test]
             [jolt.net.socket-test :as socket-test]
             [jolt.net.poller-test :as poller-test]
             [jolt.net.resolver-test :as resolver-test]
@@ -35,6 +36,7 @@
   (c/check-pred "released 16-bit foreign types exist"
                 #(= 2 %) (jolt.ffi/sizeof :uint16))
 
+  (ffi-test/run!)
   (target-test/run!)
   (address-test/run!)
   (resolver-test/run!)
