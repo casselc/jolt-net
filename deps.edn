@@ -13,6 +13,8 @@
 ;; spec is :optional, so it is skipped on other platforms rather than failing.
 {:paths ["src"]
 
+ :jolt/min-version "0.8.0"
+
  :jolt/native
  [{:name "libc (POSIX sockets, resolver, errno)" :process true}
   {:name "ws2_32" :windows ["ws2_32.dll" "ws2_32"] :optional true}]

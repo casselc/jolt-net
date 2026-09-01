@@ -205,8 +205,8 @@
 ;; sin6_flowinfo, which is network order) -- the easiest field here to get wrong.
 
 (defn- put-be16! [p off v]
-  (ffi/write p :uint8 off (bit-and (bit-shift-right v 8) 0xff))
-  (ffi/write p :uint8 (inc off) (bit-and v 0xff)))
+  (ffi/write p :uint8 (bit-and (bit-shift-right v 8) 0xff) off)
+  (ffi/write p :uint8 (bit-and v 0xff) (inc off)))
 
 (defn- get-be16 [p off]
   (+ (* 256 (ffi/read p :uint8 off)) (ffi/read p :uint8 (inc off))))
@@ -215,10 +215,10 @@
   (let [lay-in (t/layout d :sockaddr-in)]
     (if (:sin-len? d)
       ;; BSD: byte 0 is the struct length, byte 1 the family. Both fit in a byte.
-      (do (ffi/write p :uint8 base (:size lay-in))
-          (ffi/write p :uint8 (inc base) family-const))
+      (do (ffi/write p :uint8 (:size lay-in) base)
+          (ffi/write p :uint8 family-const (inc base)))
       ;; 16-bit host-order family at offset 0
-      (ffi/write p :uint16 base family-const))))
+      (ffi/write p :uint16 family-const base))))
 
 (defn encode-sockaddr!
   "Write `resolved` (or an endpoint with a numeric host) into caller-owned memory
@@ -232,22 +232,24 @@
       :inet
       (let [lay (t/layout d :sockaddr-in)
             v4 (parse-ipv4 (or host "0.0.0.0"))]
-        (dotimes [i (:size lay)] (ffi/write p :uint8 i 0))
+        (dotimes [i (:size lay)] (ffi/write p :uint8 0 i))
         (put-family! d p 0 (t/const d :af-inet))
         (put-be16! p (:port lay) port)
-        (dotimes [i 4] (ffi/write p :uint8 (+ (:addr lay) i) (nth v4 i)))
+        (dotimes [i 4] (ffi/write p :uint8 (nth v4 i) (+ (:addr lay) i)))
         (:size lay))
 
       :inet6
       (let [lay (t/layout d :sockaddr-in6)
             parsed (parse-ipv6 (or host "::"))
             b (:bytes parsed)]
-        (dotimes [i (:size lay)] (ffi/write p :uint8 i 0))
+        (dotimes [i (:size lay)] (ffi/write p :uint8 0 i))
         (put-family! d p 0 (t/const d :af-inet6))
         (put-be16! p (:port lay) port)
-        (dotimes [i 16] (ffi/write p :uint8 (+ (:addr lay) i) (nth b i)))
+        (dotimes [i 16] (ffi/write p :uint8 (nth b i) (+ (:addr lay) i)))
         ;; host byte order
-        (ffi/write p :uint (:scope-id lay) (or (:jolt.net/scope-id resolved) (:scope-id parsed) 0))
+        (ffi/write p :uint
+                   (or (:jolt.net/scope-id resolved) (:scope-id parsed) 0)
+                   (:scope-id lay))
         (:size lay))
 
       (throw (err/invalid-ex :encode-sockaddr

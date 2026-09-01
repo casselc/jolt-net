@@ -56,7 +56,7 @@
 (defn- setsockopt-int! [raw level opt v ctx]
   (let [p (ffi/alloc 4)]
     (try
-      (ffi/write p :int 0 v)
+      (ffi/write p :int v)
       (err/checked :setsockopt neg? #(nffi/invoke-captured :setsockopt raw level opt p 4) ctx)
       (finally (ffi/free p)))))
 
@@ -137,7 +137,7 @@
         sa (ffi/alloc sz)
         lenp (ffi/alloc 4)]
     (try
-      (ffi/write lenp :int 0 sz)
+      (ffi/write lenp :int sz)
       (err/checked op neg? #(nffi/invoke-captured op raw sa lenp) nil)
       (addr/decode-sockaddr d sa)
       (finally (ffi/free sa) (ffi/free lenp)))))
@@ -506,8 +506,8 @@
             ;; allocation must not leak.
             (let [lenp (ffi/alloc 4)]
               (try
-                (ffi/write errorp :int 0 0)
-                (ffi/write lenp :uint 0 4)
+                (ffi/write errorp :int 0)
+                (ffi/write lenp :uint 4)
                 (err/checked
                   :connect
                   neg?
