@@ -33,6 +33,27 @@
            "::ffff:192.168.0.1" (canon "::ffff:c0a8:1"))
   (c/check "scope id is preserved" "fe80::1%2" (canon "fe80::1%2"))
 
+  (c/section "address: FFI write value/offset contract")
+  (let [linux (t/descriptor {:os :linux :arch :x86-64 :pointer-bits 64})
+        writes (atom [])]
+    (with-redefs [ffi/write
+                  (fn
+                    ([pointer type value]
+                     (swap! writes conj [pointer type value 0]))
+                    ([pointer type value offset]
+                     (swap! writes conj [pointer type value offset])))]
+      (addr/encode-sockaddr!
+        linux ::sockaddr
+        {:jolt.net/host "127.0.0.1"
+         :jolt.net/port 8080
+         :jolt.net/family :inet}))
+    (c/check "sockaddr family value precedes its field offset"
+             true (boolean (some #{[::sockaddr :uint16 2 0]} @writes)))
+    (c/check "sockaddr port byte precedes its nonzero field offset"
+             true (boolean (some #{[::sockaddr :uint8 31 2]} @writes)))
+    (c/check "sockaddr address byte precedes its nonzero field offset"
+             true (boolean (some #{[::sockaddr :uint8 127 4]} @writes))))
+
   (c/section "address: rejections")
   (doseq [[label s] [["too few groups" "1:2:3:4:5:6:7"]
                      ["too many groups" "1:2:3:4:5:6:7:8:9"]
