@@ -5,13 +5,15 @@
 ;; the byte contract in a separate, optional namespace and must never be required
 ;; to open a plain TCP socket.
 ;;
-;; Requires Jolt v0.7.27 or newer. See docs/UPSTREAM-NOTES.md for the retired
+;; Requires Jolt v0.8.0 or newer. See docs/UPSTREAM-NOTES.md for the retired
 ;; proposal-fork prerequisites and the remaining optional zero-copy opportunity.
 ;;
 ;; libc is resolved from the running process (:process true) because the socket
 ;; and resolver symbols live in the already-loaded process image. The Windows
 ;; spec is :optional, so it is skipped on other platforms rather than failing.
 {:paths ["src"]
+
+ :jolt/min-version "0.8.0"
 
  :jolt/native
  [{:name "libc (POSIX sockets, resolver, errno)" :process true}
