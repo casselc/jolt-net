@@ -16,12 +16,13 @@ convention already used in `jolt-upstream/test/chez/formal/` and
 | `-corrected` | **unsat** | No run of the implemented design violates the property. |
 | `-nonvacuity` | **sat** | The corrected model still describes a real scenario. Without this, unsat could mean the constraints were contradictory and the proof held for free. |
 
-The errno and idempotent-close families instead use multi-query models and
-machine-readable anti-vacuity contracts. The lease/token family uses one focused
-query per failure mode plus a shared non-vacuity control. Every file is directly
-runnable with `z3`; Chiasmus strips included query commands before invoking its
-embedded solver. See [`models/README.md`](models/README.md) for commands, exact
-expected results, unsat cores, bounds, and omitted behavior.
+The errno, idempotent-close, and connect ownership/completion families instead
+use multi-query models and machine-readable anti-vacuity contracts. The
+lease/token family uses one focused query per failure mode plus a shared
+non-vacuity control. Every file is directly runnable with `z3`; Chiasmus strips
+included query commands before invoking its embedded solver. See
+[`models/README.md`](models/README.md) for commands, exact expected results,
+unsat cores, bounds, and omitted behavior.
 
 ---
 
@@ -322,22 +323,28 @@ Both result values then pass through the same `h/own` expression.
 `h/with-lease`, and has no `close!` call. The handle lease's existing CAS/drain
 protocol supplies the native-close ordering.
 
-**Verified models and controls.**
+**Verified model and controls.**
 
-- `connect-ownership-completion-buggy.smt2` is **sat**. Its concrete witness
-  returns `in_progress` with `owner_count_after_constructor = 0`, closes at step
-  2 before `getsockopt` at step 3, and lets completion failure take close
-  ownership.
-- `connect-ownership-completion-corrected.smt2` is **unsat** for the asserted
-  violation. The named core contains the return/rollback/ownership equivalences,
-  completion owner preservation, lease admission, `getsockopt`-inside-lease,
-  drain-before-native-close, all four violation definitions, and the violation
-  query.
-- `connect-ownership-completion-nonvacuity.smt2` is **sat** for the hard valid
-  scenario: `EINPROGRESS`, asynchronous failure, and caller close crossing the
-  completion lease with event order
-  acquire/close/getsockopt/release/native-close = `0/1/2/3/4`. Both owner counts
-  remain one and completion initiates no close.
+`connect-ownership-completion.smt2` independently classifies observable state
+with an arithmetic reference distance and a source-shaped implementation
+relation.
+
+- The corrected implementation's disagreement query is **unsat**.
+- Four localized **sat** mutants expose a synchronous rollback leak, an
+  ownerless `EINPROGRESS` return, completion failure consuming caller ownership,
+  and native close preceding an admitted `getsockopt(SO_ERROR)` read.
+- Four accepted **sat** boundaries cover synchronous rollback, immediate
+  success, and both asynchronous completion outcomes. The failure boundary
+  carries a real close race ordered acquire/close/getsockopt/release/native-close
+  at steps `0/1/2/3/4`.
+- One rejected **sat** boundary holds the same completion race but returns the
+  in-progress socket without an owner.
+
+The corrected **unsat** result is a classifier-consistency check. The four
+mutants and five explicitly classified boundaries are the load-bearing evidence
+for rollback, ownership transfer, completion ownership, and lease ordering. The
+machine-readable contract runs directly with
+`check-connect-ownership-completion.sh` and through `test/formal/check-all.sh`.
 
 The finite model has one socket, one completion, one closer, five distinct event
 positions, and atomic atom/lease transitions. It omits repeated completion

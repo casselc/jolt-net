@@ -26,15 +26,16 @@ sh test/formal/check-all.sh
 
 That gate rejects reference aliases, shared derived decision helpers, missing
 or unclassified controls, vacuous boundaries, and unexpected query drift. It
-currently covers the consolidated errno and idempotent-close models; the other
-proof families retain their standalone query conventions.
+currently covers the consolidated errno, idempotent-close, and non-blocking
+connect ownership/completion models; the other proof families retain their
+standalone query conventions.
 
 The 2026-07-24 audit covered the then-current 27 files with Chiasmus's SMT-LIB
 linter and embedded `z3-solver`, because that host did not have a standalone
-`z3` executable. Consolidating the errno and idempotent-close families leaves
-23 `.smt2` files in the current tree. The formal CI above now checks both
-contracts with pinned Babashka 1.13.220 and standalone Z3 4.8.12 in addition to
-the direct model queries.
+`z3` executable. Consolidating the errno, idempotent-close, and connect
+ownership/completion families leaves 21 `.smt2` files in the current tree. The
+formal CI above now checks all three contracts with pinned Babashka 1.13.220 and
+standalone Z3 4.8.12 in addition to the direct model queries.
 
 ## Expected results
 
@@ -42,6 +43,7 @@ the direct model queries.
 |---|---:|---|
 | `errno-capture-ordering.smt2` | `unsat`, `sat`, `sat`, `sat` | corrected disagreement, capture-after-cleanup fault, accepted immediate capture, rejected clobbered report |
 | `idempotent-close.smt2` | `unsat`, `sat`, `sat`, `sat`, `sat` | corrected consistency, split check-then-act safety fault, omitted-close progress fault, accepted single close, rejected double close |
+| `connect-ownership-completion.smt2` | `unsat`, four `sat` mutants, five `sat` boundaries | corrected consistency; rollback leak, ownerless EINPROGRESS, completion-owned close, pre-SO_ERROR native close; accepted sync/immediate/completion outcomes and rejected ownerless return |
 | `descriptor-reuse-buggy.smt2` | `sat` | steps `0/1/2/3`, fd `8`, generation `9 -> 10` |
 | `short-lease-post-close-corrected.smt2` | `unsat` | syscall inside lease, drain before close, post-close violation |
 | `blocking-lease-deadlock-control.smt2` | `sat` | syscall/close/release wait cycle; `deadlock = true` |
@@ -60,9 +62,6 @@ the direct model queries.
 | `wake-epoch-buggy.smt2` | `sat` | drain/producer/reset/park steps `0/1/2/3`; no byte remains |
 | `wake-epoch-corrected.smt2` | `unsat` | entry-epoch restore guarantees a byte for a new epoch |
 | `wake-epoch-nonvacuity.smt2` | `sat` | coalesced producer; drain restores byte; await progresses |
-| `connect-ownership-completion-buggy.smt2` | `sat` | `in_progress` returned with zero owners; native close step 2 precedes `getsockopt` step 3; completion takes close ownership |
-| `connect-ownership-completion-corrected.smt2` | `unsat` | returned ownership, rollback, completion preservation, and lease-drain facts exclude all four violation branches |
-| `connect-ownership-completion-nonvacuity.smt2` | `sat` | in-progress/refusal close race orders events `0/1/2/3/4` and retains one owner |
 
 The full unsat cores observed in that run were:
 
@@ -124,17 +123,23 @@ wake epoch corrected:
   property_violated
 
 connect ownership/completion corrected:
-  return_iff_immediate_or_in_progress
-  rollback_closes_every_unreturned_failure
-  ownership_transfers_for_every_returned_status
-  finish_runs_iff_completion_selected
-  completion_only_for_in_progress_in_this_bound
-  finish_never_closes_or_transfers finish_preserves_owner_count
-  lease_admission_rejects_after_close getsockopt_requires_admitted_lease
-  getsockopt_inside_short_lease native_close_waits_for_completion_release
-  returned_owner_violation_definition rollback_violation_definition
-  post_close_completion_violation_definition
-  completion_owner_violation_definition violation_definition violation_query
+  constructor-owner-count-is-bounded
+  reference-initiation-penalty-definition
+  reference-completion-penalty-definition reference-lease-penalty-definition
+  reference-order-penalty-definition reference-distance-definition
+  reference-classifier-definition implementation-return-rule-definition
+  implementation-raw-lifetime-rule-definition
+  implementation-constructor-owner-rule-definition
+  implementation-completion-domain-rule-definition
+  implementation-finish-run-rule-definition
+  implementation-finish-close-rule-definition
+  implementation-completion-owner-rule-definition
+  implementation-lease-admission-rule-definition
+  implementation-getsockopt-rule-definition
+  implementation-lease-order-rule-definition
+  implementation-native-close-rule-definition
+  implementation-classifier-definition violation-definition
+  corrected-selector corrected-counterexample-query
 ```
 
 ## Source and runtime oracles
