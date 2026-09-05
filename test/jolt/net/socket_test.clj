@@ -97,7 +97,8 @@
     (let [project-root (or (System/getenv "JOLT_PWD")
                            (System/getProperty "user.dir")
                            ".")
-          result (shell/sh "jolt" "-M:sigpipe"
+          jolt-bin (or (System/getenv "JOLT_BIN") "jolt")
+          result (shell/sh jolt-bin "-M:sigpipe"
                            :dir project-root)]
       (c/check "closed-peer write survives SIGPIPE in a subprocess"
                0 (:exit result))))
