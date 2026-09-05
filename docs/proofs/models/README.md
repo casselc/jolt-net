@@ -26,16 +26,17 @@ sh test/formal/check-all.sh
 
 That gate rejects reference aliases, shared derived decision helpers, missing
 or unclassified controls, vacuous boundaries, and unexpected query drift. It
-currently covers the consolidated errno, idempotent-close, and non-blocking
-connect ownership/completion models; the other proof families retain their
-standalone query conventions.
+currently covers the consolidated errno, idempotent-close, non-blocking connect
+ownership/completion, and readiness-token models; the other proof families
+retain their standalone query conventions.
 
 The 2026-07-24 audit covered the then-current 27 files with Chiasmus's SMT-LIB
 linter and embedded `z3-solver`, because that host did not have a standalone
-`z3` executable. Consolidating the errno, idempotent-close, and connect
-ownership/completion families leaves 21 `.smt2` files in the current tree. The
-formal CI above now checks all three contracts with pinned Babashka 1.13.220 and
-standalone Z3 4.8.12 in addition to the direct model queries.
+`z3` executable. Consolidating the errno, idempotent-close, connect
+ownership/completion, and readiness-token families leaves 18 `.smt2` files in
+the current tree. The formal CI above now checks all four contracts with pinned
+Babashka 1.13.220 and standalone Z3 4.8.12 in addition to the direct model
+queries.
 
 ## Expected results
 
@@ -44,12 +45,9 @@ standalone Z3 4.8.12 in addition to the direct model queries.
 | `errno-capture-ordering.smt2` | `unsat`, `sat`, `sat`, `sat` | corrected disagreement, capture-after-cleanup fault, accepted immediate capture, rejected clobbered report |
 | `idempotent-close.smt2` | `unsat`, `sat`, `sat`, `sat`, `sat` | corrected consistency, split check-then-act safety fault, omitted-close progress fault, accepted single close, rejected double close |
 | `connect-ownership-completion.smt2` | `unsat`, four `sat` mutants, five `sat` boundaries | corrected consistency; rollback leak, ownerless EINPROGRESS, completion-owned close, pre-SO_ERROR native close; accepted sync/immediate/completion outcomes and rejected ownerless return |
-| `descriptor-reuse-buggy.smt2` | `sat` | steps `0/1/2/3`, fd `8`, generation `9 -> 10` |
+| `readiness-token.smt2` | `unsat`, four `sat` mutants, nine `sat` boundaries | corrected consistency; omitted generation/revision/current-registration/lease checks; current-token dispatch, complete-token suppressions, and rejected stale dispatch |
 | `short-lease-post-close-corrected.smt2` | `unsat` | syscall inside lease, drain before close, post-close violation |
 | `blocking-lease-deadlock-control.smt2` | `sat` | syscall/close/release wait cycle; `deadlock = true` |
-| `readiness-generation-mismatch.smt2` | `unsat` | generation mismatch conflicts with complete-token dispatch |
-| `readiness-revision-mismatch.smt2` | `unsat` | revision mismatch conflicts with complete-token dispatch |
-| `readiness-current-token-nonvacuity.smt2` | `sat` | fd `8`, generation `10`, revision `3`, dispatch allowed |
 | `nonblocking-transition-buggy.smt2` | `sat` | fixed declaration, successful return, absent bit, marked handle, blocking-capable admission |
 | `nonblocking-transition-corrected.smt2` | `unsat` | explicit ABI boundary plus observed-bit mark postcondition exclude both violation branches |
 | `nonblocking-transition-nonvacuity.smt2` | `sat` | observed bit permits a marked handle and useful short operation |
@@ -84,13 +82,11 @@ short lease corrected:
   drain_before_native_close violation_iff_syscall_begins_after_native_close
   property_violated
 
-generation mismatch:
-  generation_mismatch_iff_tokens_differ dispatch_iff_current_complete_token
-  violation_iff_mismatch_is_dispatched property_violated
-
-revision mismatch:
-  revision_mismatch_iff_tokens_differ dispatch_iff_current_complete_token
-  violation_iff_mismatch_is_dispatched property_violated
+readiness token corrected:
+  reference-blocker-count-definition reference-dispatch-definition
+  reference-classifier-definition implementation-dispatch-definition
+  implementation-classifier-definition violation-definition
+  corrected-selector corrected-counterexample-query
 
 nonblocking transition corrected:
   binding_declares_varargs_after_two

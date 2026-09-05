@@ -16,11 +16,11 @@ convention already used in `jolt-upstream/test/chez/formal/` and
 | `-corrected` | **unsat** | No run of the implemented design violates the property. |
 | `-nonvacuity` | **sat** | The corrected model still describes a real scenario. Without this, unsat could mean the constraints were contradictory and the proof held for free. |
 
-The errno, idempotent-close, and connect ownership/completion families instead
-use multi-query models and machine-readable anti-vacuity contracts. The
-lease/token family uses one focused query per failure mode plus a shared
-non-vacuity control. Every file is directly runnable with `z3`; Chiasmus strips
-included query commands before invoking its embedded solver. See
+The errno, idempotent-close, connect ownership/completion, and readiness-token
+families instead use multi-query models and machine-readable anti-vacuity
+contracts. The remaining lease models use one focused query per failure mode
+plus separate controls. Every file is directly runnable with `z3`; Chiasmus
+strips included query commands before invoking its embedded solver. See
 [`models/README.md`](models/README.md) for commands, exact expected results,
 unsat cores, bounds, and omitted behavior.
 
@@ -142,9 +142,18 @@ the current registration after native poll returns.
 
 **Verified models and controls.**
 
-- `descriptor-reuse-buggy.smt2` is **sat**: select at step 0, close at 1,
-  reuse at 2, then issue the stale syscall at 3 on fd 8 after generation 9
-  became 10.
+- `readiness-token.smt2` gives the complete post-poll dispatch decision an
+  arithmetic reference classifier and an independently derived implementation
+  relation. The corrected disagreement query is **unsat**. Four localized
+  **sat** mutants omit generation equality, revision equality, current
+  registration existence, or snapshot-lease admission. The generation mutant
+  preserves the concrete raw-fd witness: select at step 0, close at 1, reuse fd
+  8 at 2 under generation 10, then dispatch generation 9 at 3.
+- Nine **sat** boundaries admit one current complete-token dispatch, correctly
+  suppress generation mismatch, revision mismatch, acknowledged removal,
+  missing lease, empty native events, foreign poller id, and mismatched
+  registration id, then independently reject a stale generation that is
+  observed as dispatched.
 - With nonblocking syscall admission, reject-new-on-close, and
   drain-before-native-close, `short-lease-post-close-corrected.smt2` makes a
   post-close syscall **unsat**.
@@ -153,13 +162,12 @@ the current registration after native poll returns.
   control and a design constraint: the implementation does not wrap
   uninterruptible blocking `accept` or `connect` in these leases. A poll
   snapshot is wakeable and uses a finite native safety interval.
-- `readiness-generation-mismatch.smt2` makes a reused-fd dispatch whose
-  generation differs from the current generation **unsat**.
-- A stale-interest dispatch whose acknowledged revision differs from the current
-  revision is **unsat** in `readiness-revision-mismatch.smt2`.
-- `readiness-current-token-nonvacuity.smt2` is **sat** with matching current
-  generation/revision plus an admitted lease, proving that the safety
-  constraints do not reject all valid work.
+
+The readiness model follows Chiasmus's config-equivalence skeleton. Chiasmus
+lint reported no structural errors, and all 14 query scopes independently
+verified as one corrected **unsat** result with the same eight-label core plus
+13 concrete **sat** controls. The reusable checker additionally enforces the
+four mutants and nine classified boundaries on every CI run.
 
 The executable counterpart in `jolt.net.poller-test` invalidates blocked native
 snapshots by acknowledged remove and socket close, then requires an empty event
