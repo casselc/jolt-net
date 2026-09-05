@@ -9,8 +9,9 @@
 #           remembered numbers into checked ones, and it is the only way the
 #           macOS column becomes real.
 #
-#   test  — the full suite on the minimum released Jolt version claimed by the
-#           library. The release binary is self-contained, so this lane also
+#   test  — the full suite on the exact released Jolt version currently
+#           validated, which satisfies the library's declared minimum. The
+#           release binary is self-contained, so this lane also
 #           verifies that no source-checkout or proposal-fork coupling remains.
 #
 # Windows is deliberately probe-only for now. The current Jolt runtime path and
@@ -129,7 +130,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     env:
-      JOLT_CACHE_DIR: ${{ github.workspace }}/.jolt-cache-v0.7.27
+      JOLT_CACHE_DIR: ${{ github.workspace }}/.jolt-cache-v0.8.1
       HEGEL_CACHE_DIR: ${{ github.workspace }}/.hegel-native
     strategy:
       fail-fast: false
@@ -142,22 +143,22 @@ jobs:
         with:
           path: jolt-net
 
-      - name: Install released Jolt v0.7.27
+      - name: Install released Jolt v0.8.1
         shell: bash
         run: |
           set -euo pipefail
           install_dir="$RUNNER_TEMP/jolt-bin"
           curl -fsSL \
-            https://raw.githubusercontent.com/jolt-lang/jolt/v0.7.27/install \
-            | bash -s -- --dir "$install_dir" --version 0.7.27
+            https://raw.githubusercontent.com/jolt-lang/jolt/v0.8.1/install \
+            | bash -s -- --dir "$install_dir" --version 0.8.1
           echo "$install_dir" >> "$GITHUB_PATH"
 
-      - name: Assert released Jolt v0.7.27
+      - name: Assert released Jolt v0.8.1
         shell: bash
         run: |
           set -euo pipefail
           jolt --version | tee "$RUNNER_TEMP/jolt-version"
-          grep -Fxq 'jolt v0.7.27' "$RUNNER_TEMP/jolt-version"
+          grep -Fxq 'jolt v0.8.1' "$RUNNER_TEMP/jolt-version"
 
       # Best-effort: libhegel is a downloaded native library, and a release-asset
       # fetch is not a reason to lose the socket coverage. The suite degrades to

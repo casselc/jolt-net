@@ -6,7 +6,8 @@
             [jolt.net.handle :as h]
             [jolt.net.nonblocking :as nb]
             [jolt.net.poller :as poller]
-            [jolt.net.target :as target]))
+            [jolt.net.target :as target]
+            [jolt.ffi :as ffi]))
 
 (defn- connected-pair []
   (let [listener (net/listen (net/endpoint "127.0.0.1" 0)
@@ -67,6 +68,33 @@
       (finally (net/close! p)))))
 
 (defn- run-posix! []
+  (c/section "poller: FFI write value/offset contract")
+  (let [base (net/open-poller)
+        writes (atom [])
+        layout (target/layout (net/target-descriptor) :pollfd)
+        p (assoc base :jolt.net/poll-call
+                 (fn [_ _ _] {:result 0}))]
+    (try
+      (with-redefs [ffi/write
+                    (fn
+                      ([pointer type value]
+                       (swap! writes conj [pointer type value 0]))
+                      ([pointer type value offset]
+                       (swap! writes conj [pointer type value offset])))]
+        (net/await-ready p 0))
+      (let [[fd-write events-write revents-write] @writes]
+        (c/check "pollfd fd value precedes its field offset"
+                 [(:fd layout) true]
+                 [(nth fd-write 3) (integer? (nth fd-write 2))])
+        (c/check "pollfd events value precedes its field offset"
+                 [(target/const (net/target-descriptor) :pollin)
+                  (:events layout)]
+                 [(nth events-write 2) (nth events-write 3)])
+        (c/check "pollfd revents zero precedes its nonzero field offset"
+                 [0 (:revents layout)]
+                 [(nth revents-write 2) (nth revents-write 3)]))
+      (finally (net/close! p))))
+
   (c/section "non-blocking transition contract")
   (let [listener (net/listen (net/endpoint "127.0.0.1" 0))
         d (net/target-descriptor)]

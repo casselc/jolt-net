@@ -22,7 +22,7 @@ Do not summarize this file as "supports Linux, macOS and Windows."
 | Linux x86-64 | **probed** | **runtime** | **runtime** | The development and CI platform. Real `fcntl`, `poll`, pipe-wake, sliced byte I/O, EOF, non-blocking connect/`SO_ERROR`, mutation wake, and close races are exercised. |
 | Linux aarch64 | table | none | none | Aliases the x86-64 socket facts: same kernel UAPI, same LP64. An explicit table entry with the checked facts listed — never a `:linux` fallback. |
 | Windows x86-64 | **probed** | none | none | Probed on a real Windows CI runner (and independently via mingw + WSL interop, which agree). Numbers are trustworthy; **no Winsock call has ever been made from jolt on Windows** — there is no packaged Chez Scheme for Windows runners, so the suite cannot run there yet. |
-| macOS arm64 | **probed** | **runtime** | **runtime** | The complete native suite runs on the exact Jolt v0.7.27 release binary: variadic-ABI-correct `fcntl`, `poll(2)`, non-blocking connect/`SO_ERROR`, sliced byte I/O, SIGPIPE, close races, and the owner-independent self-pipe protocol, with Darwin's distinct 32-bit `nfds_t` binding. |
+| macOS arm64 | **probed** | **runtime** | **runtime** | The complete native suite runs on the exact Jolt v0.8.1 release binary: variadic-ABI-correct `fcntl`, `poll(2)`, non-blocking connect/`SO_ERROR`, sliced byte I/O, SIGPIPE, close races, and the owner-independent self-pipe protocol, with Darwin's distinct 32-bit `nfds_t` binding. |
 | macOS x86-64 | **table** | none | none | Shares the arm64 descriptor: these are SDK facts rather than arch facts on macOS. Only arm64 is machine-checked. |
 
 ## Specific residuals

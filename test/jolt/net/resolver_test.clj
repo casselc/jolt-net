@@ -2,9 +2,61 @@
   (:require [jolt.net.check :as c]
             [jolt.net :as net]
             [jolt.net.address :as addr]
+            [jolt.net.ffi :as nffi]
+            [jolt.net.resolver :as resolver]
+            [jolt.net.target :as target]
             [jolt.ffi :as ffi]))
 
 (defn run! []
+  (c/section "resolver: FFI write value/offset contract")
+  (let [writes (atom [])
+        descriptor (net/target-descriptor)
+        layout (target/layout descriptor :addrinfo)]
+    (try
+      (with-redefs [ffi/alloc (fn [size]
+                               (if (= size 128) ::hints ::result-pointer))
+                    ffi/free (fn [_] nil)
+                    ffi/null? (fn [pointer] (= pointer ffi/null))
+                    ffi/sizeof (fn [_] 8)
+                    ffi/string->ptr (fn [value] [::string value])
+                    ffi/write
+                    (fn
+                      ([pointer type value]
+                       (swap! writes conj [pointer type value 0]))
+                      ([pointer type value offset]
+                       (swap! writes conj [pointer type value offset])))
+                    nffi/c-getaddrinfo
+                    (fn [& _]
+                      (throw (ex-info "resolver write probe complete"
+                                      {::probe-complete true})))]
+        (resolver/resolve (net/endpoint "127.0.0.1" 8080)))
+      (catch :default error
+        (when-not (::probe-complete (ex-data error))
+          (throw error))))
+    (c/check "hints zero value precedes a nonzero byte offset"
+             true (boolean (some #{[::hints :uint8 0 127]} @writes)))
+    (c/check "addrinfo family value precedes its field offset"
+             true
+             (boolean
+               (some #{[::hints :int
+                         (target/const descriptor :af-inet)
+                         (:family layout)]}
+                     @writes)))
+    (c/check "addrinfo socket type value precedes its field offset"
+             true
+             (boolean
+               (some #{[::hints :int
+                         (target/const descriptor :sock-stream)
+                         (:socktype layout)]}
+                     @writes)))
+    (c/check "addrinfo flags value precedes its field offset"
+             true
+             (boolean
+               (some #{[::hints :int
+                         (target/const descriptor :ai-numerichost)
+                         (:flags layout)]}
+                     @writes))))
+
   (c/section "resolver: numeric literals")
   (let [r (net/resolve (net/endpoint "127.0.0.1" 8080))]
     (c/check "a numeric IPv4 resolves to exactly one address" 1 (count r))
@@ -25,7 +77,7 @@
         bytes-before (vec (:jolt.net/sockaddr r))]
     (dotimes [_ 200]
       (let [p (ffi/alloc 4096)]
-        (dotimes [i 4096] (ffi/write p :uint8 i 0xA5))
+        (dotimes [i 4096] (ffi/write p :uint8 0xA5 i))
         (ffi/free p)))
     (System/gc)
     (c/check "host text survives freeaddrinfo + heap churn" host-before (:jolt.net/host r))
