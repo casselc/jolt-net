@@ -17,9 +17,9 @@ convention already used in `jolt-upstream/test/chez/formal/` and
 | `-nonvacuity` | **sat** | The corrected model still describes a real scenario. Without this, unsat could mean the constraints were contradictory and the proof held for free. |
 
 The errno, idempotent-close, connect ownership/completion, readiness-token,
-nonblocking-transition, accept-terminal-close, and wake-pair families instead
-use multi-query models and machine-readable anti-vacuity contracts. The
-remaining lease models use one focused query per failure mode plus separate
+nonblocking-transition, accept-terminal-close, wake-pair, and wake-epoch
+families instead use multi-query models and machine-readable anti-vacuity
+contracts. The remaining lease models use one focused query per failure mode plus separate
 controls. Every file is directly
 runnable with `z3`; Chiasmus
 strips included query commands before invoking its embedded solver. See
@@ -274,13 +274,27 @@ the coalesced write. The drain/reset path restores a byte if its captured epoch
 changed; await's entry-epoch comparison covers the complementary interleaving
 where drain captured the newer epoch.
 
-- `wake-epoch-buggy.smt2` is **sat** for the drain/producer/reset/park schedule
-  `0/1/2/3`, with `lost_wake = true`.
-- `wake-epoch-corrected.smt2` makes the same lost-wake query **unsat**: for one
-  admitted new epoch, either the producer writes or a drain/entry comparison
-  restores a byte before park.
-- `wake-epoch-nonvacuity.smt2` is **sat** for the hard case where the producer
-  really coalesces, drain restores the byte, and await progresses.
+- `wake-epoch.smt2` independently classifies one coalesced producer with an
+  arithmetic reference penalty and explicit implementation scenarios. The
+  corrected disagreement query is **unsat**.
+- Three localized **sat** mutants omit the epoch increment, drain-side restore,
+  or entry-side restore. The drain mutant uses a post-poll drain between awaits,
+  where the next await captures the already-current epoch and cannot recover a
+  byte that drain failed to preserve. The entry mutant places the producer after
+  drain returns, where only the current await's entry comparison can recover it.
+- Six **sat** boundaries accept producer placement during drain, after drain,
+  and between awaits, then reject each mutant observation under the corrected
+  selector.
+
+The corrected **unsat** result checks consistency between independent
+classifiers. The mutants and boundaries make the epoch increment and both
+restore positions independently load-bearing. The machine-readable contract
+runs with `check-wake-epoch.sh` and through `test/formal/check-all.sh`.
+
+The repeated runtime race exercises the combined entry/drain protocol. A
+deterministic hook additionally advances the epoch after drain captures its
+starting value and proves drain restoration writes exactly one byte while the
+later entry ensure coalesces behind it.
 
 **Accept-terminal invariant.** Given the verified non-blocking transition
 above, a registration-removal wake is intentionally a best-effort state-change

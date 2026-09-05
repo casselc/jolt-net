@@ -572,6 +572,34 @@
                true @all-woke?)
       (finally (net/close! poller))))
 
+  (let [base (net/open-poller)
+        reads (atom 0)
+        writes (atom 0)
+        eagain (get-in (net/target-descriptor) [:errno :eagain])
+        p (assoc base
+                 :jolt.net/wake-read-call
+                 (fn [_ _ _]
+                   ;; Advance the epoch after drain captured its starting value,
+                   ;; while the producer still coalesces against the old byte.
+                   (when (= 1 (swap! reads inc))
+                     (swap! (:wake-sequence base) inc))
+                   {:result -1 :code eagain})
+                 :jolt.net/wake-write-call
+                 (fn [_ _ _]
+                   (swap! writes inc)
+                   {:result 1})
+                 :jolt.net/poll-call
+                 (fn [_ _ _] {:result 0}))]
+    (try
+      (reset! (:wake-pending p) true)
+      (c/check "drain-side epoch restore preserves an empty await result"
+               [] (net/await-ready p 0))
+      (c/check "drain-side epoch comparison restores exactly one byte"
+               1 @writes)
+      (c/check "entry comparison coalesces behind the restored byte"
+               true @(:wake-pending p))
+      (finally (net/close! p))))
+
   (let [p (net/open-poller)
         writer (poller/acquire-wake-write! p)
         released? (atom false)

@@ -28,17 +28,17 @@ That gate rejects reference aliases, shared derived decision helpers, missing
 or unclassified controls, vacuous boundaries, and unexpected query drift. It
 currently covers the consolidated errno, idempotent-close, non-blocking connect
 ownership/completion, readiness-token, non-blocking-transition,
-accept-terminal-close, and wake-pair models; the other proof families retain
-their standalone query conventions.
+accept-terminal-close, wake-pair, and wake-epoch models; the other proof
+families retain their standalone query conventions.
 
 The 2026-07-24 audit covered the then-current 27 files with Chiasmus's SMT-LIB
 linter and embedded `z3-solver`, because that host did not have a standalone
 `z3` executable. Consolidating the errno, idempotent-close, connect
 ownership/completion, readiness-token, non-blocking-transition,
-accept-terminal-close, and wake-pair families leaves 12 `.smt2` files in the
-current tree. The formal CI above now checks all seven contracts with pinned
-Babashka 1.13.220 and standalone Z3 4.8.12 in addition to the direct model
-queries.
+accept-terminal-close, wake-pair, and wake-epoch families leaves 10 `.smt2`
+files in the current tree. The formal CI above now checks all eight contracts
+with pinned Babashka 1.13.220 and standalone Z3 4.8.12 in addition to the direct
+model queries.
 
 ## Expected results
 
@@ -53,9 +53,7 @@ queries.
 | `nonblocking-transition.smt2` | `unsat`, five `sat` mutants, nine `sat` boundaries | corrected consistency; omitted ABI/read-back/observed-bit/mark/admission requirements; accepted useful and fail-closed outcomes plus rejected deviations |
 | `accept-terminal-close.smt2` | `unsat`, five `sat` mutants, nine `sat` boundaries | corrected consistency; missing terminal/ordinary callback, incomplete active close, late admission, listener-close cycle; both callback orders and active/late boundaries |
 | `wake-pair.smt2` | `unsat`, three `sat` mutants, six `sat` boundaries | corrected consistency; late admission, count-before-lease release, omitted drain; crossing/completed/rejected writers and corrected rejections |
-| `wake-epoch-buggy.smt2` | `sat` | drain/producer/reset/park steps `0/1/2/3`; no byte remains |
-| `wake-epoch-corrected.smt2` | `unsat` | entry-epoch restore guarantees a byte for a new epoch |
-| `wake-epoch-nonvacuity.smt2` | `sat` | coalesced producer; drain restores byte; await progresses |
+| `wake-epoch.smt2` | `unsat`, three `sat` mutants, six `sat` boundaries | corrected consistency; omitted epoch, drain restore, entry restore; three producer positions and corrected rejections |
 
 The full unsat cores observed in that run were:
 
@@ -101,9 +99,11 @@ wake pair corrected:
   corrected-selector corrected-counterexample-query
 
 wake epoch corrected:
-  entry_restore_iff_epoch_advanced byte_iff_written_or_restored
-  new_epoch_iff_wake_after_entry violation_iff_new_epoch_has_no_byte
-  property_violated
+  wake-context-is-bounded producer-write-count-is-bounded
+  drain-restore-write-count-is-bounded entry-restore-write-count-is-bounded
+  reference-penalty-count-definition reference-classifier-definition
+  implementation-classifier-definition violation-definition
+  corrected-selector corrected-counterexample-query
 
 connect ownership/completion corrected:
   constructor-owner-count-is-bounded
@@ -157,7 +157,9 @@ interleaving tests supply the semantic oracle:
   holds an admitted writer across retirement, proves close waits and preserves
   the read end, rejects a later writer, then verifies completion after release.
 - `signal-wake!`, `drain-wake-pipe!`, and the await-entry epoch comparison
-  correspond to the wake-epoch models.
+  correspond to the wake-epoch model. The runtime suite combines a repeated
+  enter/drain race with a deterministic hook that advances the epoch after the
+  drain snapshot and observes exactly one restored byte.
 - `jolt.net/try-connect-address` transfers both successful initiation statuses
   through `h/own`, while its pre-transfer catch uses `h/raw-close!`.
   `jolt.net/finish-connect!` reads `SO_ERROR` inside `h/with-lease` and contains
