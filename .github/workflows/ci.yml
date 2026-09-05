@@ -3,7 +3,7 @@
 # Three independent jobs, because they prove different things and have very
 # different prerequisites:
 #
-#   formal — checks the errno model's structural anti-vacuity contract and
+#   formal — checks consolidated models' structural anti-vacuity contracts and
 #            solver outcomes with pinned Babashka and standalone Z3 versions.
 #
 #   probe — compiles tools/probe-constants.c against each platform's OWN headers
@@ -54,8 +54,8 @@ jobs:
           test "$(bb --version)" = "babashka v1.13.220"
           test "$(z3 --version)" = "Z3 version 4.8.12 - 64 bit"
 
-      - name: Check errno capture ordering and semantic controls
-        run: sh test/formal/check-errno-capture-ordering.sh
+      - name: Check formal models and semantic controls
+        run: sh test/formal/check-all.sh
 
   probe:
     name: probe ABI (${{ matrix.os }})

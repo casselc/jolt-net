@@ -1,0 +1,11 @@
+{:spec "idempotent-close.smt2"
+ :reference {:predicate "reference-valid"
+             :implementation-result "implementation-valid"
+             :violation "idempotent-close-violation"
+             :selector "implementation"
+             :value 0
+             :case-selector "scenario"}
+ :mutants [{:value 1 :case 0}
+           {:value 2 :case 0}]
+ :boundaries [{:case 0 :accept? true}
+              {:case 1 :accept? false}]}

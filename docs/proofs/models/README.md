@@ -17,33 +17,31 @@ for model in docs/proofs/models/*.smt2; do
 done
 ```
 
-The consolidated errno model is additionally checked through the structural
-anti-vacuity CLI pinned in `bb.edn`:
+The consolidated contract models are additionally checked through the
+structural anti-vacuity CLI pinned in `bb.edn`:
 
 ```sh
-sh test/formal/check-errno-capture-ordering.sh
+sh test/formal/check-all.sh
 ```
 
 That gate rejects reference aliases, shared derived decision helpers, missing
 or unclassified controls, vacuous boundaries, and unexpected query drift. It
-currently covers the consolidated errno model; the other proof families retain
-their standalone query conventions.
+currently covers the consolidated errno and idempotent-close models; the other
+proof families retain their standalone query conventions.
 
 The 2026-07-24 audit covered the then-current 27 files with Chiasmus's SMT-LIB
 linter and embedded `z3-solver`, because that host did not have a standalone
-`z3` executable. Consolidating the three errno files leaves 25 `.smt2` files in
-the current tree. The formal CI above now checks the errno contract with pinned
-Babashka 1.13.220 and standalone Z3 4.8.12 in addition to the direct model
-queries.
+`z3` executable. Consolidating the errno and idempotent-close families leaves
+23 `.smt2` files in the current tree. The formal CI above now checks both
+contracts with pinned Babashka 1.13.220 and standalone Z3 4.8.12 in addition to
+the direct model queries.
 
 ## Expected results
 
 | Model | Expected | Essential witness or unsat core |
 |---|---:|---|
 | `errno-capture-ordering.smt2` | `unsat`, `sat`, `sat`, `sat` | corrected disagreement, capture-after-cleanup fault, accepted immediate capture, rejected clobbered report |
-| `idempotent-close-buggy.smt2` | `sat` | both callers win; `close_count = 2` |
-| `idempotent-close-corrected.smt2` | `unsat` | `cas_atomicity`, `someone_closes`, `property_violated` |
-| `idempotent-close-nonvacuity.smt2` | `sat` | contention with exactly one CAS winner |
+| `idempotent-close.smt2` | `unsat`, `sat`, `sat`, `sat`, `sat` | corrected consistency, split check-then-act safety fault, omitted-close progress fault, accepted single close, rejected double close |
 | `descriptor-reuse-buggy.smt2` | `sat` | steps `0/1/2/3`, fd `8`, generation `9 -> 10` |
 | `short-lease-post-close-corrected.smt2` | `unsat` | syscall inside lease, drain before close, post-close violation |
 | `blocking-lease-deadlock-control.smt2` | `sat` | syscall/close/release wait cycle; `deadlock = true` |
@@ -76,7 +74,11 @@ errno corrected:
   corrected-selector corrected-counterexample-query
 
 idempotent close corrected:
-  cas_atomicity someone_closes property_violated
+  cas-atomicity close-owner-progress reference-distance-definition
+  reference-classifier-definition implementation-t1-close-definition
+  implementation-t2-close-definition implementation-count-definition
+  implementation-classifier-definition violation-definition
+  corrected-selector corrected-counterexample-query
 
 short lease corrected:
   syscall_requires_admitted_lease syscall_is_inside_short_lease
