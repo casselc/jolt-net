@@ -376,6 +376,29 @@
     (c/check "the final lease release completes native close"
              :closed (:phase @(:jolt.net/state listener))))
 
+  (let [native-closes (atom [])
+        handle (h/own 73 :test {})
+        lease (h/acquire! handle)]
+    (with-redefs [nffi/invoke
+                  (fn [& args]
+                    (swap! native-closes conj args)
+                    0)]
+      (c/check "synthetic close wins while a short lease is admitted"
+               true (h/close! handle))
+      (c/check-throws "synthetic close rejects a later lease"
+                      {:jolt.net/kind :invalid
+                       :jolt.net/op :use-after-close}
+                      #(h/acquire! handle))
+      (c/check "synthetic native close waits for lease release"
+               [] @native-closes)
+      (h/release! lease)
+      (c/check "synthetic final release performs one native close"
+               [[:close 73]] @native-closes)
+      (c/check "synthetic repeated close adds no native close"
+               false (h/close! handle))
+      (c/check "synthetic native close remains exactly once"
+               [[:close 73]] @native-closes)))
+
   (c/section "poller tokens and readiness")
   (let [[client server] (connected-pair)
         poller (net/open-poller)]
