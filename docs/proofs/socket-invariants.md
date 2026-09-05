@@ -16,12 +16,12 @@ convention already used in `jolt-upstream/test/chez/formal/` and
 | `-corrected` | **unsat** | No run of the implemented design violates the property. |
 | `-nonvacuity` | **sat** | The corrected model still describes a real scenario. Without this, unsat could mean the constraints were contradictory and the proof held for free. |
 
-The errno family instead uses one multi-query model and a machine-readable
-anti-vacuity contract. The lease/token family uses one focused query per failure
-mode plus a shared non-vacuity control. Every file is directly runnable with
-`z3`; Chiasmus strips included query commands before invoking its embedded
-solver. See [`models/README.md`](models/README.md) for commands, exact expected
-results, unsat cores, bounds, and omitted behavior.
+The errno and idempotent-close families instead use multi-query models and
+machine-readable anti-vacuity contracts. The lease/token family uses one focused
+query per failure mode plus a shared non-vacuity control. Every file is directly
+runnable with `z3`; Chiasmus strips included query commands before invoking its
+embedded solver. See [`models/README.md`](models/README.md) for commands, exact
+expected results, unsat cores, bounds, and omitted behavior.
 
 ---
 
@@ -89,19 +89,30 @@ thread proves nothing about the racing case.
 **Design.** `jolt.net.handle` guards the transition with `compare-and-set!`, so
 the read and the write are one atomic step.
 
-**Result.**
+**Result.** `idempotent-close.smt2` independently classifies the observed native
+close count against the reference value one and against the selected
+implementation's derived close count.
 
-- `idempotent-close-buggy.smt2` — **sat**. The check-then-act version
-  (`(when-not @closed (close raw) (reset! closed true))`) admits a run where both
-  threads observe `:open` and `close_count=2`.
-- `idempotent-close-corrected.smt2` — **unsat**, with core
-  `{cas_atomicity, someone_closes, property_violated}`.
-- `idempotent-close-nonvacuity.smt2` — **sat** under genuine contention, with
-  `close_count=1`.
+- The corrected CAS implementation's disagreement query is **unsat**: atomicity
+  supplies at most one winner and progress supplies at least one.
+- The split check-then-act safety mutant is **sat** when both callers attempted
+  close and observed `:open`, producing two implementation closes.
+- The omitted-side-effect progress mutant is **sat** even though one caller won
+  ownership, because it produces zero implementation closes.
+- Separate **sat** boundaries accept one observed close and reject two while
+  both callers attempted close and exactly one won the CAS.
+
+The corrected **unsat** result checks consistency between independent
+classifiers; the two mutants and classified boundaries are load-bearing evidence
+for the safety and progress halves of exactly-once close. The machine-readable
+contract runs directly with `check-idempotent-close.sh` and as part of
+`test/formal/check-all.sh`.
 
 The runtime counterpart asserts `close!` returns `true` then `false` on repeated
-calls, and that 50 failed `listen` attempts leak no descriptors. The next section
-covers the lease protocol added around that unique close owner.
+calls, and that 50 failed `listen` attempts leak no descriptors. It verifies the
+real wiring but does not force a concurrent same-handle race; the bounded model
+and source CAS supply that interleaving argument. The next section covers the
+lease protocol added around the unique close owner.
 
 ---
 
