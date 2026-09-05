@@ -583,6 +583,8 @@
                ::still-closing (deref closing 20 ::still-closing))
       (c/check "pipe read end stays open until admitted wake writers drain"
                false (h/closed? (:wake-read p)))
+      (c/check "retired wake admission rejects a later writer"
+               nil (poller/acquire-wake-write! p))
       (poller/release-wake-write! p writer)
       (reset! released? true)
       (c/check "close completes after the admitted writer releases"

@@ -17,9 +17,10 @@ convention already used in `jolt-upstream/test/chez/formal/` and
 | `-nonvacuity` | **sat** | The corrected model still describes a real scenario. Without this, unsat could mean the constraints were contradictory and the proof held for free. |
 
 The errno, idempotent-close, connect ownership/completion, readiness-token,
-nonblocking-transition, and accept-terminal-close families instead use
-multi-query models and machine-readable anti-vacuity contracts. The remaining
-lease models use one focused query per failure mode plus separate controls. Every file is directly
+nonblocking-transition, accept-terminal-close, and wake-pair families instead
+use multi-query models and machine-readable anti-vacuity contracts. The
+remaining lease models use one focused query per failure mode plus separate
+controls. Every file is directly
 runnable with `z3`; Chiasmus
 strips included query commands before invoking its embedded solver. See
 [`models/README.md`](models/README.md) for commands, exact expected results,
@@ -193,17 +194,25 @@ The ordering inside writer release is load-bearing: handle lease first, admissio
 count second. Once close observes zero admitted writers, no thread can still issue
 `write(2)`, and no new writer can enter.
 
-- `wake-pair-buggy.smt2` is **sat** with admission at step 0, read close at 2,
-  the stale write at 3, and release at 4.
-- `wake-pair-corrected.smt2` makes both violation branches **unsat**: the shared
-  CAS gate rejects a late uncounted writer, while lease-before-count release,
-  writer drain, and write-first/read-last retirement reject a previously
-  admitted writer that survives read close.
-- `wake-pair-nonvacuity.smt2` is **sat** with an admitted writer held across
-  retirement; after it drains, close still completes both pipe ends.
+- `wake-pair.smt2` independently classifies seven-step observations with an
+  arithmetic reference penalty and a source-shaped implementation relation.
+  The corrected disagreement query is **unsat**.
+- Three localized **sat** mutants admit a writer after retirement, decrement the
+  writer count before releasing its handle lease, or close without draining an
+  admitted writer. The first replaces the old contradictory late-writer arm,
+  which required both admit-before-retire and retire-before-admit.
+- Six **sat** boundaries accept a writer crossing retirement, a writer completed
+  before retirement, and a rejected late attempt, then reject each mutant
+  observation under the corrected selector.
 
-The forced-interleaving runtime test holds one admitted writer across close and
-proves close cannot retire the read end until that writer releases.
+The corrected **unsat** result checks consistency between independent
+classifiers. The three mutants and six classified boundaries make admission,
+release order, and drain independently load-bearing. The machine-readable
+contract runs with `check-wake-pair.sh` and through `test/formal/check-all.sh`.
+
+The forced-interleaving runtime test holds one admitted writer across close,
+proves close cannot retire the read end, rejects a later writer after
+retirement, and requires completion only after the admitted writer releases.
 
 **Non-blocking transition invariant.** Every lease proof above has a premise
 that is easy to overlook: an operation called “short” must really be

@@ -27,17 +27,18 @@ sh test/formal/check-all.sh
 That gate rejects reference aliases, shared derived decision helpers, missing
 or unclassified controls, vacuous boundaries, and unexpected query drift. It
 currently covers the consolidated errno, idempotent-close, non-blocking connect
-ownership/completion, readiness-token, non-blocking-transition, and
-accept-terminal-close models; the other proof families retain their standalone
-query conventions.
+ownership/completion, readiness-token, non-blocking-transition,
+accept-terminal-close, and wake-pair models; the other proof families retain
+their standalone query conventions.
 
 The 2026-07-24 audit covered the then-current 27 files with Chiasmus's SMT-LIB
 linter and embedded `z3-solver`, because that host did not have a standalone
 `z3` executable. Consolidating the errno, idempotent-close, connect
-ownership/completion, readiness-token, non-blocking-transition, and
-accept-terminal-close families leaves 14 `.smt2` files in the current tree. The
-formal CI above now checks all six contracts with pinned Babashka 1.13.220 and
-standalone Z3 4.8.12 in addition to the direct model queries.
+ownership/completion, readiness-token, non-blocking-transition,
+accept-terminal-close, and wake-pair families leaves 12 `.smt2` files in the
+current tree. The formal CI above now checks all seven contracts with pinned
+Babashka 1.13.220 and standalone Z3 4.8.12 in addition to the direct model
+queries.
 
 ## Expected results
 
@@ -51,9 +52,7 @@ standalone Z3 4.8.12 in addition to the direct model queries.
 | `blocking-lease-deadlock-control.smt2` | `sat` | syscall/close/release wait cycle; `deadlock = true` |
 | `nonblocking-transition.smt2` | `unsat`, five `sat` mutants, nine `sat` boundaries | corrected consistency; omitted ABI/read-back/observed-bit/mark/admission requirements; accepted useful and fail-closed outcomes plus rejected deviations |
 | `accept-terminal-close.smt2` | `unsat`, five `sat` mutants, nine `sat` boundaries | corrected consistency; missing terminal/ordinary callback, incomplete active close, late admission, listener-close cycle; both callback orders and active/late boundaries |
-| `wake-pair-buggy.smt2` | `sat` | admit/read-close/write/release steps `0/2/3/4` |
-| `wake-pair-corrected.smt2` | `unsat` | CAS gate, lease-before-count release, drain, write-first/read-last |
-| `wake-pair-nonvacuity.smt2` | `sat` | writer crosses retirement, drains, and both ends close |
+| `wake-pair.smt2` | `unsat`, three `sat` mutants, six `sat` boundaries | corrected consistency; late admission, count-before-lease release, omitted drain; crossing/completed/rejected writers and corrected rejections |
 | `wake-epoch-buggy.smt2` | `sat` | drain/producer/reset/park steps `0/1/2/3`; no byte remains |
 | `wake-epoch-corrected.smt2` | `unsat` | entry-epoch restore guarantees a byte for a new epoch |
 | `wake-epoch-nonvacuity.smt2` | `sat` | coalesced producer; drain restores byte; await progresses |
@@ -97,11 +96,9 @@ accept terminal close corrected:
   corrected-selector corrected-counterexample-query
 
 wake pair corrected:
-  one_cas_admission_gate late_writer_iff_admitted_after_retirement
-  handle_lease_released_before_writer_count
-  admitted_writers_drain_before_write_close
-  write_end_closes_before_read_end active_writer_iff_handle_lease_not_released
-  violation_iff_late_admission_or_live_writer property_violated
+  reference-penalty-count-definition reference-classifier-definition
+  implementation-classifier-definition violation-definition
+  corrected-selector corrected-counterexample-query
 
 wake epoch corrected:
   entry_restore_iff_epoch_advanced byte_iff_written_or_restored
@@ -156,7 +153,9 @@ interleaving tests supply the semantic oracle:
   oracles for the accept-terminal-close model.
 - `jolt.net.poller/acquire-wake-write!`, `release-wake-write!`,
   `retire-wake-writes!`, and `finish-close!` correspond to the wake-pair gate,
-  release, drain, and write-first/read-last transitions.
+  release, drain, and write-first/read-last transitions. The forced runtime race
+  holds an admitted writer across retirement, proves close waits and preserves
+  the read end, rejects a later writer, then verifies completion after release.
 - `signal-wake!`, `drain-wake-pipe!`, and the await-entry epoch comparison
   correspond to the wake-epoch models.
 - `jolt.net/try-connect-address` transfers both successful initiation statuses
