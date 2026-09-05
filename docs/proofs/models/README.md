@@ -7,8 +7,8 @@ witness; an `unsat` result means no violating execution exists inside that
 model. A separate `-nonvacuity` model demonstrates that each corrected design
 still permits useful work.
 
-Every `.smt2` file includes its own `(check-sat)` and either `(get-model)` or
-`(get-unsat-core)`, so a standalone Z3 can run it directly:
+Every `.smt2` file contains its solver queries, so a standalone Z3 can run it
+directly:
 
 ```sh
 for model in docs/proofs/models/*.smt2; do
@@ -17,19 +17,30 @@ for model in docs/proofs/models/*.smt2; do
 done
 ```
 
-Chiasmus removes those query commands before invoking its embedded solver. On
-2026-07-24 all 27 files passed the Chiasmus SMT-LIB linter with zero errors and
-were solver-checked with its local `z3-solver` package. The host did not have a
-standalone `z3` executable; Chiasmus verification, rather than the shell example
-above, is the recorded solver run.
+The consolidated errno model is additionally checked through the structural
+anti-vacuity CLI pinned in `bb.edn`:
+
+```sh
+sh test/formal/check-errno-capture-ordering.sh
+```
+
+That gate rejects reference aliases, shared derived decision helpers, missing
+or unclassified controls, vacuous boundaries, and unexpected query drift. It
+currently covers the consolidated errno model; the other proof families retain
+their standalone query conventions.
+
+The 2026-07-24 audit covered the then-current 27 files with Chiasmus's SMT-LIB
+linter and embedded `z3-solver`, because that host did not have a standalone
+`z3` executable. Consolidating the three errno files leaves 25 `.smt2` files in
+the current tree. The formal CI above now checks the errno contract with pinned
+Babashka 1.13.220 and standalone Z3 4.8.12 in addition to the direct model
+queries.
 
 ## Expected results
 
 | Model | Expected | Essential witness or unsat core |
 |---|---:|---|
-| `errno-capture-ordering-buggy.smt2` | `sat` | failure `1`, cleanup `2`, reported `2` |
-| `errno-capture-ordering-corrected.smt2` | `unsat` | `failing_call_sets_errno`, `capture_before_cleanup`, `property_violated` |
-| `errno-capture-ordering-nonvacuity.smt2` | `sat` | failure `1`, cleanup `2`, reported `1` |
+| `errno-capture-ordering.smt2` | `unsat`, `sat`, `sat`, `sat` | corrected disagreement, capture-after-cleanup fault, accepted immediate capture, rejected clobbered report |
 | `idempotent-close-buggy.smt2` | `sat` | both callers win; `close_count = 2` |
 | `idempotent-close-corrected.smt2` | `unsat` | `cas_atomicity`, `someone_closes`, `property_violated` |
 | `idempotent-close-nonvacuity.smt2` | `sat` | contention with exactly one CAS winner |
@@ -59,7 +70,10 @@ The full unsat cores observed in that run were:
 
 ```text
 errno corrected:
-  failing_call_sets_errno capture_before_cleanup property_violated
+  failure-sets-errno reference-distance-definition
+  reference-classifier-definition implementation-capture-definition
+  implementation-classifier-definition violation-definition
+  corrected-selector corrected-counterexample-query
 
 idempotent close corrected:
   cas_atomicity someone_closes property_violated

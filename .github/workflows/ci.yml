@@ -1,7 +1,10 @@
 # jolt-net CI.
 #
-# Two independent jobs, because they prove different things and have very
+# Three independent jobs, because they prove different things and have very
 # different prerequisites:
+#
+#   formal — checks the errno model's structural anti-vacuity contract and
+#            solver outcomes with pinned Babashka and standalone Z3 versions.
 #
 #   probe — compiles tools/probe-constants.c against each platform's OWN headers
 #           and runs it. Needs only a C compiler, so it covers all three
@@ -29,6 +32,31 @@ on:
   workflow_dispatch:
 
 jobs:
+  formal:
+    name: formal anti-vacuity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Babashka
+        uses: DeLaGuardo/setup-clojure@13.6.1
+        with:
+          bb: 1.13.220
+
+      - name: Install Z3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y z3=4.8.12-3.1build1
+
+      - name: Record tool versions
+        run: |
+          test "$(bb --version)" = "babashka v1.13.220"
+          test "$(z3 --version)" = "Z3 version 4.8.12 - 64 bit"
+
+      - name: Check errno capture ordering and semantic controls
+        run: sh test/formal/check-errno-capture-ordering.sh
+
   probe:
     name: probe ABI (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
