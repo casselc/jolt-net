@@ -16,10 +16,11 @@ convention already used in `jolt-upstream/test/chez/formal/` and
 | `-corrected` | **unsat** | No run of the implemented design violates the property. |
 | `-nonvacuity` | **sat** | The corrected model still describes a real scenario. Without this, unsat could mean the constraints were contradictory and the proof held for free. |
 
-The errno, idempotent-close, connect ownership/completion, and readiness-token
-families instead use multi-query models and machine-readable anti-vacuity
-contracts. The remaining lease models use one focused query per failure mode
-plus separate controls. Every file is directly runnable with `z3`; Chiasmus
+The errno, idempotent-close, connect ownership/completion, readiness-token, and
+nonblocking-transition families instead use multi-query models and
+machine-readable anti-vacuity contracts. The remaining lease models use one
+focused query per failure mode plus separate controls. Every file is directly
+runnable with `z3`; Chiasmus
 strips included query commands before invoking its embedded solver. See
 [`models/README.md`](models/README.md) for commands, exact expected results,
 unsat cores, bounds, and omitted behavior.
@@ -225,23 +226,32 @@ reads `F_GETFL` after `F_SETFL` and does not mark or return a handle unless
 the corrected ABI declaration: it makes a future compiler, libc, or binding
 regression fail closed before any short lease is admitted.
 
-- `nonblocking-transition-buggy.smt2` is **sat**: fixed-arity declaration,
-  apparent `F_SETFL` success, absent `O_NONBLOCK`, marked handle, and a
-  blocking-capable accept are all present in one witness.
-- `nonblocking-transition-corrected.smt2` makes both violation branches
-  **unsat**: the Apple-arm64 declaration has the explicit boundary, and
-  admission without the observed bit contradicts the mark postcondition. The
-  solver leaves `nonblocking_observed` unconstrained, so this is a fail-closed
-  safety result rather than an assumption that the syscall must work.
-- `nonblocking-transition-nonvacuity.smt2` is **sat** when read-back observes
-  the bit; the handle is marked and a useful short operation is admitted.
+- `nonblocking-transition.smt2` independently classifies bounded observations
+  with an arithmetic reference penalty and a source-shaped implementation
+  relation. The corrected disagreement query is **unsat**.
+- Five localized **sat** mutants independently omit the variadic declaration,
+  the post-`F_SETFL` read-back, the observed `O_NONBLOCK` bit, mark-after-return
+  ordering, or admission-after-mark ordering. No mutant relies on another
+  omitted requirement to produce its witness.
+- Nine **sat** boundaries accept a useful verified transition, missing-bit and
+  native-failure fail-closed outcomes, and a present bit with neighboring flag
+  data; five rejected observations pin each individual requirement.
+
+The corrected **unsat** result checks consistency between independent
+classifiers. The five mutants and nine explicitly classified boundaries are
+the load-bearing evidence that the model distinguishes the ABI, read-back,
+flag, bookkeeping, and admission obligations. The machine-readable contract
+runs directly with `check-nonblocking-transition.sh` and through
+`test/formal/check-all.sh`.
 
 The runtime counterpart independently calls `F_GETFL` on a newly returned
 listener and requires `O_NONBLOCK` before the rest of the poller suite runs. It
-also injects the motivating bad outcome—apparent `F_SETFL` success followed by
-a read-back without the bit—and requires a fail-closed exception after the
-second `F_GETFL`. The core FFI test exercises the same variadic `fcntl` binding
-and transition. The complete Darwin arm64 gate passed with source-built Chez
+classifies the bit with and without neighboring flags, forces the source order
+transition → mark → operation, and proves a thrown transition reaches neither
+later step. It also injects the motivating bad outcome—apparent `F_SETFL`
+success followed by a read-back without the bit—and requires a fail-closed
+exception after the second `F_GETFL`. The core FFI test exercises the same
+variadic `fcntl` binding and transition. The complete Darwin arm64 gate passed with source-built Chez
 10.4.1 for commit `65a0f1e` in
 [CI run 30078697403](https://github.com/casselc/jolt-net/actions/runs/30078697403),
 closing the platform-specific runtime evidence for this bounded surface. The
