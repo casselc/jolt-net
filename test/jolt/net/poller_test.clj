@@ -105,6 +105,50 @@
                                0)]
         (c/check "F_GETFL observes O_NONBLOCK before short leases are admitted"
                  true (nb/enabled? flags)))
+      (let [nonblock (get-in d [:const :o-nonblock])
+            neighbor (if (= nonblock 1) 2 1)]
+        (c/check "O_NONBLOCK classification preserves neighboring flag bits"
+                 [false false true true]
+                 (mapv nb/enabled?
+                       [0 neighbor nonblock (bit-or nonblock neighbor)])))
+      (let [events (atom [])
+            mark! h/mark-nonblocking!]
+        (reset! (:jolt.net/nonblocking listener) false)
+        (with-redefs [nb/set-raw! (fn
+                                    ([raw]
+                                     (swap! events conj :transition)
+                                     raw)
+                                    ([raw _]
+                                     (swap! events conj :transition)
+                                     raw))
+                      h/mark-nonblocking! (fn [handle]
+                                            (swap! events conj :mark)
+                                            (mark! handle))]
+          (@#'net/with-nonblocking-lease
+            listener
+            (fn [_ _] (swap! events conj :operation))))
+        (c/check "transition verification precedes mark and operation admission"
+                 [:transition :mark :operation] @events))
+      (let [events (atom [])]
+        (reset! (:jolt.net/nonblocking listener) false)
+        (c/check-throws
+          "a failed transition prevents mark and operation admission"
+          {:jolt.net/op :fcntl-setfl :jolt.net/kind :unsupported-target}
+          #(with-redefs [nb/set-raw! (fn [& _]
+                                       (swap! events conj :transition)
+                                       (throw (ex-info "injected transition failure"
+                                                       {:jolt.net/op :fcntl-setfl
+                                                        :jolt.net/kind :unsupported-target})))
+                         h/mark-nonblocking! (fn [handle]
+                                               (swap! events conj :mark)
+                                               handle)]
+             (@#'net/with-nonblocking-lease
+               listener
+               (fn [_ _] (swap! events conj :operation)))))
+        (c/check "failed transition stops at the verification boundary"
+                 [:transition] @events)
+        (c/check "failed transition leaves the handle unmarked"
+                 false (h/nonblocking? listener)))
       (finally (net/close! listener))))
 
   (let [d (net/target-descriptor)

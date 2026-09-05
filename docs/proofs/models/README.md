@@ -27,16 +27,16 @@ sh test/formal/check-all.sh
 That gate rejects reference aliases, shared derived decision helpers, missing
 or unclassified controls, vacuous boundaries, and unexpected query drift. It
 currently covers the consolidated errno, idempotent-close, non-blocking connect
-ownership/completion, and readiness-token models; the other proof families
-retain their standalone query conventions.
+ownership/completion, readiness-token, and non-blocking-transition models; the
+other proof families retain their standalone query conventions.
 
 The 2026-07-24 audit covered the then-current 27 files with Chiasmus's SMT-LIB
 linter and embedded `z3-solver`, because that host did not have a standalone
 `z3` executable. Consolidating the errno, idempotent-close, connect
-ownership/completion, and readiness-token families leaves 18 `.smt2` files in
-the current tree. The formal CI above now checks all four contracts with pinned
-Babashka 1.13.220 and standalone Z3 4.8.12 in addition to the direct model
-queries.
+ownership/completion, readiness-token, and non-blocking-transition families
+leaves 16 `.smt2` files in the current tree. The formal CI above now checks all
+five contracts with pinned Babashka 1.13.220 and standalone Z3 4.8.12 in
+addition to the direct model queries.
 
 ## Expected results
 
@@ -48,9 +48,7 @@ queries.
 | `readiness-token.smt2` | `unsat`, four `sat` mutants, nine `sat` boundaries | corrected consistency; omitted generation/revision/current-registration/lease checks; current-token dispatch, complete-token suppressions, and rejected stale dispatch |
 | `short-lease-post-close-corrected.smt2` | `unsat` | syscall inside lease, drain before close, post-close violation |
 | `blocking-lease-deadlock-control.smt2` | `sat` | syscall/close/release wait cycle; `deadlock = true` |
-| `nonblocking-transition-buggy.smt2` | `sat` | fixed declaration, successful return, absent bit, marked handle, blocking-capable admission |
-| `nonblocking-transition-corrected.smt2` | `unsat` | explicit ABI boundary plus observed-bit mark postcondition exclude both violation branches |
-| `nonblocking-transition-nonvacuity.smt2` | `sat` | observed bit permits a marked handle and useful short operation |
+| `nonblocking-transition.smt2` | `unsat`, five `sat` mutants, nine `sat` boundaries | corrected consistency; omitted ABI/read-back/observed-bit/mark/admission requirements; accepted useful and fail-closed outcomes plus rejected deviations |
 | `accept-terminal-close-buggy.smt2` | `sat` | pre-entry wake consumed; poller remains open; accept remains blocked after listener close |
 | `accept-terminal-close-corrected.smt2` | `unsat` | active await exits, late await is rejected, and no callback/native-close wait cycle exists |
 | `accept-terminal-close-nonvacuity.smt2` | `sat` | removal callback first; active await exits; listener close succeeds |
@@ -89,10 +87,10 @@ readiness token corrected:
   corrected-selector corrected-counterexample-query
 
 nonblocking transition corrected:
-  binding_declares_varargs_after_two
-  mark_iff_success_and_observed_postcondition
-  short_operation_requires_marked_handle declaration_violation_definition
-  lease_violation_definition violation_definition property_violated
+  reference-nonblock-observed-definition reference-penalty-count-definition
+  reference-classifier-definition implementation-nonblock-observed-definition
+  implementation-transition-definition implementation-classifier-definition
+  violation-definition corrected-selector corrected-counterexample-query
 
 accept terminal close corrected:
   listener_close_owns_the_transition accept_installs_terminal_callback
@@ -150,10 +148,13 @@ interleaving tests supply the semantic oracle:
   generation and revision models.
 - `jolt.net.ffi/p-fcntl` places `:varargs` after its two fixed arguments, and
   `jolt.net.nonblocking/set-raw!` reads `F_GETFL` back before any handle is
-  marked. `test/jolt/net/poller_test.clj` independently observes the bit on a
-  returned listener and injects the buggy control where `F_SETFL` appears to
-  succeed but read-back still lacks the bit. These are the source and runtime
-  oracles for the non-blocking-transition models.
+  marked. Constructor call sites complete `set-raw!` before ownership transfer;
+  handle call sites mark only after it, and `with-nonblocking-lease` invokes the
+  operation only after the mark. `test/jolt/net/poller_test.clj` independently
+  observes the bit on a returned listener, checks neighboring flag values,
+  verifies the transition/mark/admission order, and injects both a thrown
+  transition and the buggy apparent-success/missing-bit outcome. These are the
+  source and runtime oracles for the non-blocking-transition model.
 - `jolt.net/accept` installs a terminal listener before poller registration;
   `jolt.net.poller/close!` retires admission and waits for an active await to
   exit. `jolt.net.handle/release!` can release the await's listener lease while
