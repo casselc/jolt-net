@@ -1,0 +1,10 @@
+{:spec "errno-capture-ordering.smt2"
+ :reference {:predicate "reference-valid"
+             :implementation-result "implementation-valid"
+             :violation "errno-capture-violation"
+             :selector "implementation"
+             :value 0
+             :case-selector "scenario"}
+ :mutants [{:value 1 :case 0}]
+ :boundaries [{:case 0 :accept? true}
+              {:case 1 :accept? false}]}

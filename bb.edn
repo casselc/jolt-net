@@ -1,0 +1,4 @@
+{:deps
+ {io.github.chucklehead-dev/jolt-aspect-packs
+  {:git/url "https://github.com/chucklehead-dev/jolt-aspect-packs.git"
+   :git/sha "63d947b06802d1cd412ec85872c051dbb8e58153"}}}

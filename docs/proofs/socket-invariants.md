@@ -6,8 +6,9 @@ test can show that one run behaved; it cannot show that no run misbehaves. The
 formalized invariants below are checked with z3; runtime-only controls are
 labelled explicitly.
 
-Most proof families have three models, following the convention already used in
-`jolt-upstream/test/chez/formal/` and `jolt-tcp/docs/proofs/`:
+Most legacy proof families have three standalone models, following the
+convention already used in `jolt-upstream/test/chez/formal/` and
+`jolt-tcp/docs/proofs/`:
 
 | Suffix | Expected | Meaning |
 |---|---|---|
@@ -15,9 +16,10 @@ Most proof families have three models, following the convention already used in
 | `-corrected` | **unsat** | No run of the implemented design violates the property. |
 | `-nonvacuity` | **sat** | The corrected model still describes a real scenario. Without this, unsat could mean the constraints were contradictory and the proof held for free. |
 
-The lease/token family uses one focused query per failure mode plus a shared
-non-vacuity control. Every file is directly runnable with `z3`; Chiasmus strips
-the included `(check-sat)` and model/core query before invoking its embedded
+The errno family instead uses one multi-query model and a machine-readable
+anti-vacuity contract. The lease/token family uses one focused query per failure
+mode plus a shared non-vacuity control. Every file is directly runnable with
+`z3`; Chiasmus strips included query commands before invoking its embedded
 solver. See [`models/README.md`](models/README.md) for commands, exact expected
 results, unsat cores, bounds, and omitted behavior.
 
@@ -42,15 +44,29 @@ the failing call, with nothing interposed, and callers put rollback in a `catch`
 
 **Result.**
 
-- `errno-capture-ordering-buggy.smt2` — **sat**. Counterexample:
-  `fail_code=1`, `cleanup_code=2`, `reported=2`.
-- `errno-capture-ordering-corrected.smt2` — **unsat**, with core
-  `{failing_call_sets_errno, capture_before_cleanup, property_violated}`.
-  The core is the informative part: the property follows from the capture
-  ordering *alone* and does not depend on the cleanup's code at all.
-- `errno-capture-ordering-nonvacuity.smt2` — **sat**. Witness has
-  `errno_after_cleanup=2 ≠ errno_after_fail=1` and `reported=1`: a real clobber
-  occurred, and the failure's own code was still reported.
+- `errno-capture-ordering.smt2` first asks whether the independently derived
+  reference and immediate-capture implementation classify any observation
+  differently. The result is **unsat** across all positive distinct failure and
+  cleanup codes and every observed integer code.
+- The same disagreement query under the capture-after-cleanup selector is
+  **sat** with `fail-code=1`, `cleanup-code=2`, and
+  `observed-reported-code=1`: the reference accepts the preserved failure while
+  the faulty implementation rejects it in favor of cleanup's code.
+- Separate **sat** boundaries explicitly accept the immediate-capture
+  observation and reject a report containing the cleanup code. These are not
+  mutation queries.
+
+The corrected **unsat** result checks consistency between two independently
+encoded classifiers; once immediate capture is selected their equivalence is
+necessarily definitional. The fault and boundary witnesses are therefore
+load-bearing evidence that the model distinguishes capture order and a visible
+cleanup clobber.
+
+The machine-readable contract is enforced with:
+
+```sh
+sh test/formal/check-errno-capture-ordering.sh
+```
 
 The runtime counterpart is in `jolt.net.socket-test`: a double bind must report
 `EADDRINUSE` against `:bind`, not a cleanup error. The proof covers the
