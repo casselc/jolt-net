@@ -489,6 +489,14 @@
           {:result result :code code})
         {:result result}))))
 
+(defn- monotonic-now
+  "Read the production monotonic clock. The optional map hook is an internal
+  deterministic deadline test seam."
+  [poller]
+  (if-let [hook (:jolt.net/nano-time poller)]
+    (hook)
+    (System/nanoTime)))
+
 (defn await-ready
   "Wait up to timeout-ms for readiness and return
   [{:token token :events #{:read ...}} ...].
@@ -538,12 +546,12 @@
                 (ffi/write p :int16 (:events layout)
                            (interest-mask (:interests entry)))
                 (ffi/write p :int16 (:revents layout) 0)))
-            (let [deadline (+ (System/nanoTime)
+            (let [deadline (+ (monotonic-now poller)
                               (* timeout-ms 1000000))
                   poll-result
                   (loop []
                     (let [remaining (max 0 (- deadline
-                                              (System/nanoTime)))
+                                              (monotonic-now poller)))
                           remaining-ms (quot (+ remaining 999999) 1000000)
                           wait-ms (min remaining-ms max-native-wait-ms)
                           outcome (poll-once poller buf n wait-ms)
@@ -554,7 +562,7 @@
                           ;; A signal does not consume the caller's timeout.
                           ;; Retry against the same absolute monotonic deadline.
                           (if (= code (t/errno-code d :eintr))
-                            (if (< (System/nanoTime) deadline)
+                            (if (< (monotonic-now poller) deadline)
                               (recur)
                               ;; poll may leave revents undefined on failure.
                               ;; A deadline-expired interruption is therefore a
@@ -566,7 +574,7 @@
                         ;; return from the caller's timeout.
                         (and (zero? result)
                              (pos? remaining)
-                             (< (System/nanoTime) deadline))
+                             (< (monotonic-now poller) deadline))
                         (recur)
 
                         :else result)))]
