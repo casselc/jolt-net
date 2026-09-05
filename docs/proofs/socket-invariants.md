@@ -17,10 +17,9 @@ convention already used in `jolt-upstream/test/chez/formal/` and
 | `-nonvacuity` | **sat** | The corrected model still describes a real scenario. Without this, unsat could mean the constraints were contradictory and the proof held for free. |
 
 The errno, idempotent-close, connect ownership/completion, readiness-token,
-nonblocking-transition, accept-terminal-close, wake-pair, and wake-epoch
-families instead use multi-query models and machine-readable anti-vacuity
-contracts. The remaining lease models use one focused query per failure mode plus separate
-controls. Every file is directly
+short-lease, nonblocking-transition, accept-terminal-close, wake-pair, and
+wake-epoch families use multi-query models and machine-readable anti-vacuity
+contracts. Every file is directly
 runnable with `z3`; Chiasmus
 strips included query commands before invoking its embedded solver. See
 [`models/README.md`](models/README.md) for commands, exact expected results,
@@ -156,14 +155,21 @@ the current registration after native poll returns.
   missing lease, empty native events, foreign poller id, and mismatched
   registration id, then independently reject a stale generation that is
   observed as dispatched.
-- With nonblocking syscall admission, reject-new-on-close, and
-  drain-before-native-close, `short-lease-post-close-corrected.smt2` makes a
-  post-close syscall **unsat**.
-- A deliberately blocking syscall that retains the same lease makes shutdown
-  deadlock **sat** in `blocking-lease-deadlock-control.smt2`. This is a semantic
-  control and a design constraint: the implementation does not wrap
-  uninterruptible blocking `accept` or `connect` in these leases. A poll
-  snapshot is wakeable and uses a finite native safety interval.
+- `short-lease.smt2` independently classifies the handle admission, syscall,
+  release, native-close, and wait-cycle observations. Its corrected disagreement
+  query is **unsat**.
+- Four localized **sat** mutants admit after close begins, let a syscall escape
+  its lease and begin after native close, close natively before the admitted
+  lease releases, or accept the blocking return/close/release wait cycle.
+- Eight **sat** boundaries accept an admitted close race, completion before
+  close, a rejected late acquire, and an incomplete wait graph, then reject all
+  four mutant observations under the corrected selector.
+
+The blocking-cycle mutant is both an anti-vacuity control and a design
+constraint: the implementation does not wrap uninterruptible blocking `accept`
+or `connect` in these leases. A poll snapshot is wakeable and uses a finite
+native safety interval. The machine-readable contract runs with
+`check-short-lease.sh` and through `test/formal/check-all.sh`.
 
 The readiness model follows Chiasmus's config-equivalence skeleton. Chiasmus
 lint reported no structural errors, and all 14 query scopes independently
@@ -175,7 +181,9 @@ The executable counterpart in `jolt.net.poller-test` invalidates blocked native
 snapshots by acknowledged remove and socket close, then requires an empty event
 set. It proves that an updated token supersedes the old revision while the
 successor still receives readiness, and that native close remains deferred until
-a held lease is released.
+a held lease is released. A synthetic native-call oracle additionally proves
+that close rejects later acquisition and calls native close exactly once, only
+after the admitted lease releases.
 
 **Wake-pipe pair invariant.** Per-handle leases are insufficient for a pipe:
 closing the read end while an already-admitted writer still holds the write end
