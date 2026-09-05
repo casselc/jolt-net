@@ -453,6 +453,9 @@
              [(:phase @(:lifecycle poller))
               (h/closed? (:wake-write poller))
               (h/closed? (:wake-read poller))])
+    (c/check-throws "terminal close rejects a later await"
+                    {:jolt.net/kind :invalid :jolt.net/op :await-ready}
+                    #(net/await-ready poller 0))
     (let [start (System/nanoTime)
           result (net/close! poller)
           elapsed (- (System/nanoTime) start)]

@@ -16,10 +16,10 @@ convention already used in `jolt-upstream/test/chez/formal/` and
 | `-corrected` | **unsat** | No run of the implemented design violates the property. |
 | `-nonvacuity` | **sat** | The corrected model still describes a real scenario. Without this, unsat could mean the constraints were contradictory and the proof held for free. |
 
-The errno, idempotent-close, connect ownership/completion, readiness-token, and
-nonblocking-transition families instead use multi-query models and
-machine-readable anti-vacuity contracts. The remaining lease models use one
-focused query per failure mode plus separate controls. Every file is directly
+The errno, idempotent-close, connect ownership/completion, readiness-token,
+nonblocking-transition, and accept-terminal-close families instead use
+multi-query models and machine-readable anti-vacuity contracts. The remaining
+lease models use one focused query per failure mode plus separate controls. Every file is directly
 runnable with `z3`; Chiasmus
 strips included query commands before invoking its embedded solver. See
 [`models/README.md`](models/README.md) for commands, exact expected results,
@@ -295,22 +295,28 @@ terminal callback return → listener notification/native close. The ordinary
 registration callback can run before or after the terminal callback; both
 orders use the same independent terminal path.
 
-- `accept-terminal-close-buggy.smt2` is **sat**: a best-effort wake occurs
-  before await entry, is no longer visible after entry, and the still-open
-  poller admits an accept that remains blocked after listener close.
-- `accept-terminal-close-corrected.smt2` makes both violation branches
-  **unsat**. An active await cannot survive terminal callback return, a later
-  await cannot enter the retired poller, and the await does not depend on
-  listener native close, so the three-edge callback cycle cannot form.
-- `accept-terminal-close-nonvacuity.smt2` is **sat** with the ordinary removal
-  callback first and an active await crossing terminal close. The await exits,
-  the poller becomes terminal, and listener close completes.
+- `accept-terminal-close.smt2` independently classifies bounded observations
+  with an arithmetic reference penalty and explicit implementation scenarios.
+  The corrected disagreement query is **unsat**.
+- Five localized **sat** mutants omit the terminal callback, lose a neighboring
+  ordinary callback during reentrant removal, return before an active await
+  exits, leave lifecycle open and admit a late await, or make await release
+  depend on listener native close and enter the callback wait cycle.
+- Nine **sat** boundaries accept active and late-await behavior under both
+  callback orders, then reject each of the five mutant observations under the
+  corrected selector.
+
+The corrected **unsat** result checks consistency between independent
+classifiers. The five mutants and nine explicitly classified boundaries make
+callback preservation, completion, terminal admission, and the independent
+wake-pipe release source load-bearing. The machine-readable contract runs with
+`check-accept-terminal-close.sh` and through `test/formal/check-all.sh`.
 
 The runtime counterpart waits until accept has installed both close listeners
 instead of sleeping for a guessed scheduler interval. It bounds listener close
-and accept completion independently, and places callbacks before and after the
-accept-owned listeners to verify their reentrant removal does not skip a
-neighboring callback.
+and accept completion independently, rejects an await attempted after terminal
+close, and places callbacks before and after the accept-owned listeners to
+verify their reentrant removal does not skip a neighboring callback.
 
 ---
 

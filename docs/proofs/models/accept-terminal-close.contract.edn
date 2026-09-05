@@ -1,0 +1,21 @@
+{:spec "accept-terminal-close.smt2"
+ :reference {:predicate "reference-valid"
+             :implementation-result "implementation-valid"
+             :violation "accept-terminal-close-violation"
+             :selector "implementation"
+             :value 0
+             :case-selector "scenario"}
+ :mutants [{:value 1 :case 0}
+           {:value 2 :case 1}
+           {:value 3 :case 2}
+           {:value 4 :case 3}
+           {:value 5 :case 4}]
+ :boundaries [{:case 10 :accept? true}
+              {:case 11 :accept? true}
+              {:case 12 :accept? true}
+              {:case 13 :accept? true}
+              {:case 14 :accept? false}
+              {:case 15 :accept? false}
+              {:case 16 :accept? false}
+              {:case 17 :accept? false}
+              {:case 18 :accept? false}]}

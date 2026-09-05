@@ -27,16 +27,17 @@ sh test/formal/check-all.sh
 That gate rejects reference aliases, shared derived decision helpers, missing
 or unclassified controls, vacuous boundaries, and unexpected query drift. It
 currently covers the consolidated errno, idempotent-close, non-blocking connect
-ownership/completion, readiness-token, and non-blocking-transition models; the
-other proof families retain their standalone query conventions.
+ownership/completion, readiness-token, non-blocking-transition, and
+accept-terminal-close models; the other proof families retain their standalone
+query conventions.
 
 The 2026-07-24 audit covered the then-current 27 files with Chiasmus's SMT-LIB
 linter and embedded `z3-solver`, because that host did not have a standalone
 `z3` executable. Consolidating the errno, idempotent-close, connect
-ownership/completion, readiness-token, and non-blocking-transition families
-leaves 16 `.smt2` files in the current tree. The formal CI above now checks all
-five contracts with pinned Babashka 1.13.220 and standalone Z3 4.8.12 in
-addition to the direct model queries.
+ownership/completion, readiness-token, non-blocking-transition, and
+accept-terminal-close families leaves 14 `.smt2` files in the current tree. The
+formal CI above now checks all six contracts with pinned Babashka 1.13.220 and
+standalone Z3 4.8.12 in addition to the direct model queries.
 
 ## Expected results
 
@@ -49,9 +50,7 @@ addition to the direct model queries.
 | `short-lease-post-close-corrected.smt2` | `unsat` | syscall inside lease, drain before close, post-close violation |
 | `blocking-lease-deadlock-control.smt2` | `sat` | syscall/close/release wait cycle; `deadlock = true` |
 | `nonblocking-transition.smt2` | `unsat`, five `sat` mutants, nine `sat` boundaries | corrected consistency; omitted ABI/read-back/observed-bit/mark/admission requirements; accepted useful and fail-closed outcomes plus rejected deviations |
-| `accept-terminal-close-buggy.smt2` | `sat` | pre-entry wake consumed; poller remains open; accept remains blocked after listener close |
-| `accept-terminal-close-corrected.smt2` | `unsat` | active await exits, late await is rejected, and no callback/native-close wait cycle exists |
-| `accept-terminal-close-nonvacuity.smt2` | `sat` | removal callback first; active await exits; listener close succeeds |
+| `accept-terminal-close.smt2` | `unsat`, five `sat` mutants, nine `sat` boundaries | corrected consistency; missing terminal/ordinary callback, incomplete active close, late admission, listener-close cycle; both callback orders and active/late boundaries |
 | `wake-pair-buggy.smt2` | `sat` | admit/read-close/write/release steps `0/2/3/4` |
 | `wake-pair-corrected.smt2` | `unsat` | CAS gate, lease-before-count release, drain, write-first/read-last |
 | `wake-pair-nonvacuity.smt2` | `sat` | writer crosses retirement, drains, and both ends close |
@@ -93,16 +92,9 @@ nonblocking transition corrected:
   violation-definition corrected-selector corrected-counterexample-query
 
 accept terminal close corrected:
-  listener_close_owns_the_transition accept_installs_terminal_callback
-  listener_close_invokes_captured_terminal_callback
-  active_await_exits_before_poller_close_returns
-  terminal_callback_retires_poller_lifecycle
-  late_admission_iff_attempt_on_open_poller
-  active_survival_iff_terminal_return_did_not_release_await
-  poller_wake_close_is_independent_of_listener_native_close
-  callback_cycle_iff_all_three_wait_edges_exist
-  blocked_iff_active_wait_survives_or_late_wait_is_admitted
-  violation_iff_blocked_after_return_or_callback_cycle property_violated
+  reference-penalty-count-definition reference-classifier-definition
+  implementation-classifier-definition violation-definition
+  corrected-selector corrected-counterexample-query
 
 wake pair corrected:
   one_cas_admission_gate late_writer_iff_admitted_after_retirement
@@ -158,8 +150,10 @@ interleaving tests supply the semantic oracle:
 - `jolt.net/accept` installs a terminal listener before poller registration;
   `jolt.net.poller/close!` retires admission and waits for an active await to
   exit. `jolt.net.handle/release!` can release the await's listener lease while
-  listener notification is still in progress. These are the source oracles for
-  the accept-terminal-close models.
+  listener notification is still in progress. The runtime suite verifies active
+  await completion, late-await rejection, terminal lifecycle, and neighboring
+  callbacks around reentrant listener removal. These are the source and runtime
+  oracles for the accept-terminal-close model.
 - `jolt.net.poller/acquire-wake-write!`, `release-wake-write!`,
   `retire-wake-writes!`, and `finish-close!` correspond to the wake-pair gate,
   release, drain, and write-first/read-last transitions.
