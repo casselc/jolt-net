@@ -403,27 +403,26 @@
 
   (let [base (net/open-poller)
         waits (atom [])
+        clock (atom 0)
         eintr (get-in (net/target-descriptor) [:errno :eintr])
         p (assoc base
+                 :jolt.net/nano-time
+                 (fn [] @clock)
                  :jolt.net/poll-call
                  (fn [_ _ wait-ms]
                    (let [calls (swap! waits conj wait-ms)]
                      (if (= 1 (count calls))
                        (do
-                         (Thread/sleep 60)
+                         (reset! clock 60000000)
                          {:result -1 :code eintr})
                        (do
-                         (Thread/sleep wait-ms)
+                         (reset! clock 120000000)
                          {:result 0})))))]
     (try
       (c/check "EINTR retry preserves the await result"
                [] (net/await-ready p 120))
-      (c/check-pred "EINTR retry uses the remaining absolute deadline"
-                    (fn [observed]
-                      (and (<= 2 (count observed))
-                           (< (apply max (rest observed))
-                              (first observed))))
-                    @waits)
+      (c/check "EINTR retry uses the remaining absolute deadline"
+               [120 60] @waits)
       (finally (net/close! p))))
 
   (let [base (net/open-poller)
