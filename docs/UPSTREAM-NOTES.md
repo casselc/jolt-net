@@ -4,9 +4,9 @@ jolt-net is written to move into the jolt stdlib as `jolt.net`. This file record
 what that move depends on, and where jolt-net deliberately departs from the
 accepted design spike.
 
-## Current upstream boundary (revalidated 2026-08-25)
+## Current upstream boundary (revalidated 2026-09-05)
 
-Jolt v0.7.27 releases four of the original six prerequisites. The other two are
+By Jolt v0.8.0, four of the original six prerequisites were released. The other two are
 no longer runtime requirements: jolt-net derives only the three target facts it
 consumes from released APIs, and uses scoped scratch buffers for native I/O.
 The checkout now runs on stock Jolt.

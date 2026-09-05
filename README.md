@@ -61,7 +61,8 @@ Ownership transfers with both `net/connected` and `net/in-progress`; neither
 
 ## Requirements
 
-Jolt v0.7.27 supplies every runtime primitive this checkout uses. The former
+Jolt v0.8.0 supplies every runtime primitive this checkout uses, and CI runs
+the exact released v0.8.1 binary. The former
 proposal-fork dependencies have been removed: target selection is a narrow,
 fail-closed helper over released System properties and `ffi/sizeof`, while
 non-blocking byte I/O uses scoped native scratch plus `read-into!` and sliced
